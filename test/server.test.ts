@@ -16,7 +16,7 @@ test('smoke: connect, create table, start with bots, play a hand to the end, clo
     const t0 = await c.waitFor((m) => m.t === 'table');
     assert.equal(t0.phase, 'waiting');
     assert.equal(t0.mySeat, 0);
-    assert.equal(t0.code.length, 5);
+    assert.equal(t0.code.length, 6);
     c.send({ t: 'startTable' });
     autoPlay(c);
     const done = await c.waitFor((m) => m.t === 'table' && m.lastHand !== null);
@@ -148,7 +148,7 @@ test('public tables are listed; private ones are not; join by code works for bot
     assert.equal(v.seats[1].name, 'Guest');
     // wrong code
     const g2 = (await connect(srv.port, 'G2')).c;
-    g2.send({ t: 'joinCode', code: 'ZZZZZ' });
+    g2.send({ t: 'joinCode', code: 'ZZZZZZ' });
     assert.equal((await g2.waitFor((m) => m.t === 'error')).code, 'not_found');
   } finally { await srv.close(); }
 });
@@ -260,7 +260,7 @@ test('reconnect with the token keeps the seat after a refresh', async () => {
     await sleep(60);
     const again = await connect(srv.port, 'Ref', welcome.token);
     assert.equal(again.welcome.resumed, true);
-    const v = await again.c.waitFor((m) => m.t === 'table');
+    const v = await again.c.waitFor((m) => m.t === 'table', 8000, true);
     assert.equal(v.id, before.id);
     assert.equal(v.mySeat, before.mySeat);
     assert.ok(Array.isArray(v.hand));

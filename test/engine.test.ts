@@ -323,3 +323,66 @@ test('rank helper orders cards', () => {
   assert.ok(rankOf('AS') > rankOf('KS'));
   assert.ok(rankOf('2S') < rankOf('3S'));
 });
+
+// ---------- table rule toggles: break rule and sandbags ----------
+
+test('break rule ON (default): a spade cannot be led while a non-spade is held; OFF: spades may lead any time', () => {
+  const hands = [['AS', '2H'], ['9S', '3D'], ['4D', '4C'], ['5D', '5C']];
+  const on = playing(hands);
+  assert.equal(on.breakRule, true);
+  assert.deepEqual(legalPlays(on, 1), ['3D']);
+  assert.throws(() => playCard(on, 1, '9S'), EngineError);
+
+  const g = createGame({ rng: mulberry32(1), dealer: 0, breakRule: false });
+  assert.equal(g.breakRule, false);
+  g.hands = hands.map((h) => h.slice());
+  for (let s = 0; s < 4; s++) placeBid(g, g.turn, 3);
+  assert.deepEqual(legalPlays(g, 1).sort(), ['3D', '9S']);
+  playCard(g, 1, '9S'); // allowed with the break rule off, and it is still tracked as broken
+  assert.equal(g.spadesBroken, true);
+  playCard(g, 2, '4D'); // void in spades: anything goes
+  playCard(g, 3, '5D');
+  assert.deepEqual(legalPlays(g, 0), ['AS']); // seat 0 holds a spade, so it must follow suit
+});
+
+test('break rule OFF: bots still play only legal cards and games finish', () => {
+  for (let seed = 1; seed <= 20; seed++) {
+    const r = simulateGame({ target: 250, rng: mulberry32(seed), breakRule: false });
+    assert.equal(r.capped, false);
+  }
+});
+
+test('sandbags ON (default): overtricks are bags and 10 bags cost 100', () => {
+  const on = scoreTeam([0, 2], [4, 0, 3, 0], [5, 0, 3, 0], 8); // bid 7 took 8: +70 +1 bag; 8+1 = 9 bags
+  assert.equal(on.result.bagsGained, 1);
+  assert.equal(on.bagsAfter, 9);
+  assert.equal(on.result.delta, 71);
+  const over = scoreTeam([0, 2], [4, 0, 3, 0], [6, 0, 4, 0], 8); // +3 bags: 11 -> penalty
+  assert.equal(over.result.bagPenalty, -100);
+  assert.equal(over.bagsAfter, 1);
+});
+
+test('sandbags OFF: no bag points, no bag counting, no penalty; contract and nil still score', () => {
+  const r = scoreTeam([0, 2], [4, 0, 3, 0], [6, 0, 4, 0], 8, false); // bid 7 took 10
+  assert.equal(r.result.bagsGained, 0);
+  assert.equal(r.result.bagPenalty, 0);
+  assert.equal(r.bagsAfter, 8); // unchanged: nothing counted
+  assert.equal(r.result.delta, 70); // only the contract
+  const nil = scoreTeam([0, 2], [0, 0, 4, 0], [2, 0, 6, 0], 0, false); // nil failed (-100), partner bid 4 took 6
+  assert.equal(nil.result.nilPoints, -100);
+  assert.equal(nil.result.bagsGained, 0);
+  assert.equal(nil.result.delta, -100 + 40);
+  const set = scoreTeam([0, 2], [4, 0, 3, 0], [2, 0, 2, 0], 3, false);
+  assert.equal(set.result.delta, -70);
+});
+
+test('sandbags OFF through a whole game: bags stay at 0 and hand results carry no bag penalty', () => {
+  const g = createGame({ target: 250, rng: mulberry32(5), dealer: 0, sandbags: false });
+  let guard = 0;
+  while (g.phase !== 'gameOver' && guard++ < 5000) {
+    botStep(g);
+    assert.deepEqual(g.bags, [0, 0]);
+    if (g.lastHand) for (const t of g.lastHand.teams) { assert.equal(t.bagPenalty, 0); assert.equal(t.bagsGained, 0); }
+  }
+  assert.equal(g.phase, 'gameOver');
+});

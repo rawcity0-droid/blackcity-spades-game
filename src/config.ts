@@ -23,6 +23,9 @@ export const CONFIG = {
   tableTargets: [250, 500],
   quickPlayTarget: 250,
   tournamentSizes: [4, 8, 16],
+  eventTableOptions: [1, 2, 3, 4, 5, 6, 7, 8], // "Create Tournament": a multi-table event of one to eight tables
+  eventTarget: 250,      // each event table plays one game to this score
+  codeLength: 6,         // table / tournament / event join codes (letters and digits, no 0 O 1 I)
   tournamentTargetEarly: 250, // every round except the final
   tournamentTargetFinal: 500, // the final (set equal to the early value for "250 everywhere")
 
@@ -37,11 +40,12 @@ export const CONFIG = {
     maxConnections: 1000,
     maxTables: 300,
     maxTournaments: 60,
+    maxEvents: 40,
     maxEntrantsPerTournamentTeam: 2,
   },
   timing: {
     botDelayMs: 800,        // pause before a bot plays when humans are watching
-    trickPauseMs: 1400,     // show the finished trick before clearing it
+    trickPauseMs: 1500,     // a finished trick stays visible this long (the next player may already lead)
     handPauseMs: 20000,     // time on the hand summary before the next deal (humans can press Ready)
     emptyTableTtlMs: 300000,// destroy a normal table when no human is connected for this long
     abandonMs: 60000,       // tournament table: forfeit/fast-forward after this long without humans

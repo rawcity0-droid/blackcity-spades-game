@@ -110,7 +110,7 @@ export class Tournament {
       this.entrants = this.entrants.filter((e) => e.playerId !== pid);
     } else if (this.state === 'running') {
       for (const r of this.rounds) for (const m of r) {
-        if (m.status === 'done' || m.status === 'live') continue;
+        if (m.status === 'done') continue; // live matches too: the TeamRef is shared with the later rounds the team may reach
         for (const t of m.teams) for (const s of t?.slots ?? []) if (s.playerId === pid) { s.playerId = null; s.name = 'Bot'; }
       }
     }

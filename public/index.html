@@ -3,24 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#120c26">
+<meta name="theme-color" content="#1f4d38">
 <title>Blackcity Spades</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <div id="app">
-  <header id="topbar">
-    <div class="brand"><span class="brand-mark">&#9824;</span> Blackcity Spades</div>
-    <div id="who"></div>
-  </header>
-  <div id="banner" class="banner hidden"></div>
-  <main id="main">
-    <section id="screen-nick" class="screen"></section>
-    <section id="screen-lobby" class="screen hidden"></section>
-    <section id="screen-table" class="screen hidden"></section>
-    <section id="screen-tournament" class="screen hidden"></section>
-  </main>
-  <div id="overlay" class="overlay hidden"></div>
+  <div id="stage">
+    <header id="topbar">
+      <div id="scores"></div>
+      <div id="target-label"></div>
+      <div id="top-actions"></div>
+    </header>
+    <div id="board"></div>
+    <div id="status"></div>
+    <div id="handzone"></div>
+    <div id="footbar"><span id="conn" class="conn"><i></i><b>Connecting…</b></span></div>
+  </div>
+  <div id="home-layer" class="layer-home hidden"></div>
+  <div id="sheet-layer" class="sheet-layer hidden"></div>
+  <div id="auto-layer"></div>
+  <div id="modal-layer"></div>
   <div id="toast" class="toast hidden" role="status"></div>
 </div>
 <script type="module" src="/app.js"></script>

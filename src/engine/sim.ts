@@ -21,8 +21,8 @@ export function botStep(g: GameState): boolean {
   }
 }
 
-export function simulateGame(opts: { target: number; rng?: Rng; maxHands?: number }): SimResult {
-  const g = createGame({ target: opts.target, rng: opts.rng ?? secureRng, dealer: 0 });
+export function simulateGame(opts: { target: number; rng?: Rng; maxHands?: number; breakRule?: boolean; sandbags?: boolean }): SimResult {
+  const g = createGame({ target: opts.target, rng: opts.rng ?? secureRng, dealer: 0, breakRule: opts.breakRule, sandbags: opts.sandbags });
   const cap = opts.maxHands ?? 300;
   while (g.phase !== 'gameOver') {
     if (g.phase === 'handOver' && g.handNo >= cap) {

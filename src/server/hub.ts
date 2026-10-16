@@ -7,7 +7,8 @@ import type { WebSocket } from 'ws';
 import { CONFIG, formatPrice } from '../config.js';
 import { Rng, secureRng } from '../engine/cards.js';
 import { Team } from '../engine/game.js';
-import { ClientMsg, ErrorCode, RateLimiter, parseClientMessage } from './protocol.js';
+import { CODE_ALPHABET, ClientMsg, ErrorCode, RateLimiter, parseClientMessage, sanitizeNick } from './protocol.js';
+import { EventTableEntry, TableEvent } from './event.js';
 import { SubscriptionStore } from './subscriptions.js';
 import { Table, Timings, defaultTimings } from './table.js';
 import { Match, Tournament } from './tournament.js';
@@ -20,6 +21,7 @@ export interface Player {
   tableId: string | null;       // table where this player holds a seat (or is queued for one)
   watchTableId: string | null;  // table being watched read-only
   tournamentId: string | null;
+  eventId: string | null;       // multi-table event ("Create Tournament")
   lastSeen: number;
 }
 
@@ -43,14 +45,13 @@ export const hostIdFromToken = (token: string): string =>
 
 export const upgradeMessage = (): string => `Upgrade to host — $${formatPrice(CONFIG.subscriptionPriceUsdPerMonth)}/month`;
 
-const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-
 export class Hub {
   players = new Map<string, Player>();            // by player id
   private byToken = new Map<string, Player>();
   tables = new Map<string, Table>();
   tournaments = new Map<string, Tournament>();
-  private codes = new Map<string, { kind: 'table' | 'tournament'; id: string }>();
+  events = new Map<string, TableEvent>();
+  private codes = new Map<string, { kind: 'table' | 'tournament' | 'event'; id: string }>();
   readonly store: SubscriptionStore;
   readonly devUnlock: boolean;
   private timings: Timings;
@@ -109,6 +110,7 @@ export class Hub {
     if (seated && seated.seatOf(p.id) >= 0) seated.setConnected(p.id, false);
     else if (seated) { seated.unwatch(p.id); p.tableId = null; } // queued for a seat: just drop out
     for (const t of this.tournaments.values()) t.viewers.delete(p.id);
+    for (const e of this.events.values()) e.viewers.delete(p.id);
     this.markLobbyDirty();
   }
 
@@ -141,7 +143,7 @@ export class Hub {
     const resumed = !!p;
     if (!p) {
       const token = msg.token ?? crypto.randomBytes(16).toString('hex'); // an unknown well-formed token is adopted (restart continuity)
-      p = { id: hostIdFromToken(token), token, nick: msg.nick, ws: null, tableId: null, watchTableId: null, tournamentId: null, lastSeen: Date.now() };
+      p = { id: hostIdFromToken(token), token, nick: msg.nick || sanitizeNick(''), ws: null, tableId: null, watchTableId: null, tournamentId: null, eventId: null, lastSeen: Date.now() };
       this.players.set(p.id, p);
       this.byToken.set(token, p);
     }
@@ -151,7 +153,7 @@ export class Hub {
       old.close(4000, 'replaced');
     }
     p.ws = conn.ws;
-    p.nick = msg.nick;
+    if (msg.nick) p.nick = msg.nick;
     p.lastSeen = Date.now();
     conn.player = p;
     this.sendWs(conn.ws, {
@@ -164,6 +166,11 @@ export class Hub {
         tournamentTargetEarly: CONFIG.tournamentTargetEarly,
         tournamentTargetFinal: CONFIG.tournamentTargetFinal,
         quickPlayTarget: CONFIG.quickPlayTarget,
+        defaultTarget: CONFIG.defaultTarget,
+        eventTableOptions: CONFIG.eventTableOptions,
+        eventTarget: CONFIG.eventTarget,
+        codeLength: CONFIG.codeLength,
+        rules: { loseScore: CONFIG.loseScore, bagLimit: CONFIG.bagLimit, bagPenalty: CONFIG.bagPenalty, nilBonus: CONFIG.nilBonus },
         devUnlock: this.devUnlock,
       },
     });
@@ -172,6 +179,8 @@ export class Hub {
     else { p.tableId = null; this.sendWs(conn.ws, this.lobbyMessage()); }
     const t = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
     if (t) this.send(p.id, t.view(p.id)); else p.tournamentId = null;
+    const ev = p.eventId ? this.events.get(p.eventId) : undefined;
+    if (ev) this.send(p.id, ev.view(p.id)); else p.eventId = null;
   }
 
   /** Drop long-gone state lazily (called on each hello and lobby build). */
@@ -182,8 +191,13 @@ export class Hub {
         (t.state === 'registering' && now - t.createdAt > 3 * 3600000);
       if (old) this.removeTournament(id);
     }
+    for (const [id, e] of this.events) {
+      const old = (e.finishedAt && now - e.finishedAt > 30 * 60000) || e.state === 'cancelled' ||
+        (e.state === 'registering' && now - e.createdAt > 3 * 3600000);
+      if (old) this.removeEvent(id);
+    }
     for (const [id, p] of this.players) {
-      if (!p.ws && !p.tableId && !p.tournamentId && now - p.lastSeen > 3600000) {
+      if (!p.ws && !p.tableId && !p.tournamentId && !p.eventId && now - p.lastSeen > 3600000) {
         this.players.delete(id);
         this.byToken.delete(p.token);
       }
@@ -201,11 +215,31 @@ export class Hub {
     }
   }
 
+  private removeEvent(id: string): void {
+    const e = this.events.get(id);
+    if (!e) return;
+    this.events.delete(id);
+    this.codes.delete(e.code);
+    for (const pid of e.audience()) {
+      const p = this.players.get(pid);
+      if (p && p.eventId === id) { p.eventId = null; this.send(pid, { t: 'eventLeft', reason: e.state === 'cancelled' ? 'The organizer cancelled the tournament' : '' }); }
+    }
+  }
+
   // ---------- routing ----------
 
   private route(p: Player, msg: ClientMsg): void {
     switch (msg.t) {
-      case 'createTable': return this.createTable(p, msg.isPublic, msg.target);
+      case 'setNick': p.nick = msg.nick; return this.send(p.id, { t: 'nick', nick: p.nick });
+      case 'createTable': return this.createTable(p, msg.isPublic, msg.target, msg.breakRule, msg.sandbags);
+      case 'setRules': return this.tableAction(p, (t) => t.setRules(p.id, msg));
+      case 'addBots': return this.tableAction(p, (t) => t.addBots(p.id));
+      case 'swapPartners': return this.tableAction(p, (t) => t.swapPartners(p.id));
+      case 'createEvent': return this.createEvent(p, msg.tables, msg.target ?? CONFIG.eventTarget);
+      case 'startEvent': return this.startEvent(p);
+      case 'leaveEvent': return this.leaveEvent(p);
+      case 'goPremium': return this.goPremium(p);
+      case 'restorePremium': return this.restorePremium(p, msg.email);
       case 'joinTable': return this.joinTable(p, this.tables.get(msg.id), true);
       case 'watchTable': return this.watchTable(p, this.tables.get(msg.id), true);
       case 'joinCode': return this.joinCode(p, msg.code);
@@ -239,6 +273,8 @@ export class Hub {
     if (p.tableId) return 'Leave your current table first';
     const t = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
     if (t && (t.state === 'registering' || t.state === 'running')) return 'You are in a tournament. Leave it first';
+    const ev = p.eventId ? this.events.get(p.eventId) : undefined;
+    if (ev && (ev.state === 'registering' || ev.state === 'running')) return 'You are in a tournament. Leave it first';
     return null;
   }
 
@@ -251,18 +287,18 @@ export class Hub {
   private newCode(): string {
     for (;;) {
       let c = '';
-      for (let i = 0; i < 5; i++) c += CODE_CHARS[Math.floor(this.rng() * CODE_CHARS.length)];
+      for (let i = 0; i < CONFIG.codeLength; i++) c += CODE_ALPHABET[Math.floor(this.rng() * CODE_ALPHABET.length)];
       if (!this.codes.has(c)) return c;
     }
   }
 
   // ---------- tables ----------
 
-  private makeTable(opts: { isPublic: boolean; target: number; hostId: string | null; tournament?: { id: string; matchId: string; label: string } }): Table {
+  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; tournament?: { id: string; matchId: string; label: string } }): Table {
     const id = this.newId((x) => this.tables.has(x));
     const code = this.newCode();
     const table = new Table({
-      id, code, isPublic: opts.isPublic, target: opts.target, hostId: opts.hostId, timings: this.timings,
+      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, timings: this.timings,
       tournament: opts.tournament, rng: this.rng,
       hooks: {
         send: (pid, msg) => this.send(pid, msg),
@@ -305,6 +341,8 @@ export class Hub {
     for (const pid of people) this.releasePlayer(pid, t, 'Match finished');
     const tour = info ? this.tournaments.get(info.id) : undefined;
     if (tour && info) tour.matchResult(info.matchId, winner, scores);
+    const ev = info ? this.events.get(info.id) : undefined;
+    if (ev && info) ev.tableResult(info.matchId, winner, scores, _forfeit);
     this.markLobbyDirty();
   }
 
@@ -312,7 +350,7 @@ export class Hub {
     if (p.watchTableId) { this.tables.get(p.watchTableId)?.unwatch(p.id); p.watchTableId = null; }
   }
 
-  private createTable(p: Player, isPublic: boolean, target: number): void {
+  private createTable(p: Player, isPublic: boolean, target: number, breakRule?: boolean, sandbags?: boolean): void {
     if (!isPublic && CONFIG.hostOnly.privateTables && !this.isSubscribed(p)) {
       return this.err(p, 'upgrade_required', upgradeMessage());
     }
@@ -320,7 +358,7 @@ export class Hub {
     if (busy) return this.err(p, 'busy', busy);
     if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
     this.leaveCurrent(p);
-    const table = this.makeTable({ isPublic, target, hostId: p.id });
+    const table = this.makeTable({ isPublic, target, breakRule, sandbags, hostId: p.id });
     table.seatHuman(0, p.id, p.nick, true);
     p.tableId = table.id;
     table.broadcast();
@@ -331,6 +369,7 @@ export class Hub {
     const target = this.codes.get(code);
     if (!target) return this.err(p, 'not_found', 'No table or tournament with that code');
     if (target.kind === 'tournament') return this.joinTournament(p, this.tournaments.get(target.id), false);
+    if (target.kind === 'event') return this.joinEvent(p, this.events.get(target.id));
     this.joinTable(p, this.tables.get(target.id), false);
   }
 
@@ -348,6 +387,7 @@ export class Hub {
     const target = this.codes.get(code);
     if (!target) return this.err(p, 'not_found', 'No table or tournament with that code');
     if (target.kind === 'tournament') return this.watchTournament(p, this.tournaments.get(target.id));
+    if (target.kind === 'event') return this.watchEvent(p, this.events.get(target.id));
     this.watchTable(p, this.tables.get(target.id), false);
   }
 
@@ -362,6 +402,8 @@ export class Hub {
     if (t.tournament) {
       const tour = this.tournaments.get(t.tournament.id);
       if (tour && !tour.hasPlayer(p.id)) { tour.viewers.add(p.id); this.send(p.id, tour.view(p.id)); }
+      const ev = this.events.get(t.tournament.id);
+      if (ev && !ev.hasPlayer(p.id)) { ev.viewers.add(p.id); this.send(p.id, ev.view(p.id)); }
     }
   }
 
@@ -494,7 +536,126 @@ export class Hub {
     return { id: table.id, code: table.code };
   }
 
-  // ---------- subscription (dev stub) ----------
+  // ---------- multi-table events ("Create Tournament", one to eight tables) ----------
+
+  private createEvent(p: Player, tables: number, target: number): void {
+    if (CONFIG.hostOnly.hostTournaments && !this.isSubscribed(p)) return this.err(p, 'upgrade_required', upgradeMessage());
+    const busy = this.busyReason(p);
+    if (busy) return this.err(p, 'busy', busy);
+    if (this.events.size >= CONFIG.limits.maxEvents) return this.err(p, 'too_many', 'Too many tournaments right now');
+    this.leaveCurrent(p);
+    const id = this.newId((x) => this.events.has(x));
+    const code = this.newCode();
+    const ev = new TableEvent({ id, code, tables, target, organizerId: p.id, host: this.eventHost() });
+    this.events.set(id, ev);
+    this.codes.set(code, { kind: 'event', id });
+    ev.join(p.id, p.nick);
+    p.eventId = id;
+    this.pushEvent(ev);
+  }
+
+  private joinEvent(p: Player, ev: TableEvent | undefined): void {
+    if (!ev) return this.err(p, 'not_found', 'Tournament not found');
+    if (p.eventId === ev.id) return this.pushEvent(ev);
+    const busy = this.busyReason(p);
+    if (busy) return this.err(p, 'busy', busy);
+    this.leaveCurrent(p);
+    const r = ev.join(p.id, p.nick);
+    if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
+    p.eventId = ev.id;
+    ev.viewers.delete(p.id);
+    this.pushEvent(ev);
+  }
+
+  private watchEvent(p: Player, ev: TableEvent | undefined): void {
+    if (!ev) return this.err(p, 'not_found', 'Tournament not found');
+    ev.viewers.add(p.id);
+    this.send(p.id, ev.view(p.id));
+  }
+
+  private startEvent(p: Player): void {
+    const ev = p.eventId ? this.events.get(p.eventId) : undefined;
+    if (!ev) return this.err(p, 'not_found', 'You are not in a tournament');
+    const r = ev.start(p.id);
+    if (!r.ok) this.err(p, r.code as ErrorCode, r.message);
+  }
+
+  private leaveEvent(p: Player): void {
+    const ev = p.eventId ? this.events.get(p.eventId) : undefined;
+    if (!ev) {
+      p.eventId = null;
+      for (const x of this.events.values()) x.viewers.delete(p.id);
+      this.send(p.id, { t: 'eventLeft', reason: '' });
+      return;
+    }
+    const table = p.tableId ? this.tables.get(p.tableId) : undefined;
+    if (table?.tournament?.id === ev.id) {
+      p.tableId = null;
+      table.leave(p.id);
+      this.send(p.id, { t: 'left', reason: '' });
+    }
+    p.eventId = null;
+    const r = ev.leave(p.id);
+    this.send(p.id, { t: 'eventLeft', reason: '' });
+    this.sendLobbyTo(p);
+    if (r.ok && r.cancelled) this.removeEvent(ev.id);
+    else this.pushEvent(ev);
+  }
+
+  private eventHost() {
+    return {
+      createEventTable: (ev: TableEvent, entry: EventTableEntry) => this.createEventTable(ev, entry),
+      changed: (ev: TableEvent) => { this.pushEvent(ev); this.markLobbyDirty(); },
+    };
+  }
+
+  private pushEvent(ev: TableEvent): void {
+    for (const pid of ev.audience()) {
+      const p = this.players.get(pid);
+      if (!p || !p.ws) continue;
+      if (p.eventId === ev.id || ev.viewers.has(pid)) this.send(pid, ev.view(pid));
+    }
+  }
+
+  private createEventTable(ev: TableEvent, entry: EventTableEntry): { id: string; code: string } {
+    const table = this.makeTable({
+      isPublic: false, target: ev.target, hostId: null,
+      tournament: { id: ev.id, matchId: `t${entry.no}`, label: `Table ${entry.no} · to ${ev.target}` },
+    });
+    entry.seats.forEach((slot, seat) => {
+      const pl = slot.playerId ? this.players.get(slot.playerId) : undefined;
+      if (!pl) { table.seatBot(seat); return; }
+      this.leaveCurrent(pl);
+      if (pl.tableId) this.tables.get(pl.tableId)?.leave(pl.id);
+      table.seatHuman(seat, pl.id, pl.nick, !!pl.ws);
+      pl.tableId = table.id;
+    });
+    table.startGame();
+    return { id: table.id, code: table.code };
+  }
+
+  // ---------- subscription (stubs; real billing comes later, see billing.ts) ----------
+
+  private notice(p: Player, kind: 'info' | 'error', message: string): void {
+    this.send(p.id, { t: 'notice', kind, message });
+  }
+
+  /** "Go Premium": no payment provider yet. Only DEV_UNLOCK=1 flips the flag (no money moves). */
+  private goPremium(p: Player): void {
+    if (!this.devUnlock) return this.notice(p, 'info', 'Billing is not set up yet. Premium checkout is coming soon.');
+    this.store.set(p.id, true);
+    this.send(p.id, { t: 'subscription', subscribed: true });
+    this.notice(p, 'info', 'Premium switched on (test mode, no payment was taken).');
+  }
+
+  /** "Restore Premium": would look up the subscription by email. Stub: not available unless DEV_UNLOCK=1. */
+  private restorePremium(p: Player, _email: string): void {
+    if (!this.devUnlock) return this.notice(p, 'info', 'Restoring Premium is not available yet. Billing is not set up.');
+    this.store.set(p.id, true);
+    this.send(p.id, { t: 'subscription', subscribed: true });
+    this.notice(p, 'info', 'Premium restored (test mode, nothing was verified).');
+  }
+
 
   private devToggle(p: Player): void {
     if (!this.devUnlock) return this.err(p, 'not_allowed', 'Dev unlock is off');

@@ -40,6 +40,8 @@ export interface TableInit {
   code: string;
   isPublic: boolean;
   target: number;
+  breakRule?: boolean;
+  sandbags?: boolean;
   hostId: string | null;
   timings: Timings;
   hooks: TableHooks;
@@ -56,7 +58,9 @@ export class Table {
   readonly id: string;
   readonly code: string;
   readonly isPublic: boolean;
-  readonly target: number;
+  target: number;
+  breakRule: boolean;
+  sandbags: boolean;
   readonly tournament?: { id: string; matchId: string; label: string };
   hostId: string | null;
   seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
@@ -65,7 +69,8 @@ export class Table {
   private waiterNames = new Map<string, string>();
   game: GameState | null = null;
   status: TableStatus = 'waiting';
-  pause: CompletedTrick | null = null;
+  pause: CompletedTrick | null = null;    // end of a hand: the last trick is shown and play is blocked
+  collect: CompletedTrick | null = null;  // mid-hand: the completed trick stays visible but does NOT block the next lead
   forfeit = false;
   fastForward = false;
   teamHadHumans: [boolean, boolean] = [false, false];
@@ -75,6 +80,7 @@ export class Table {
   private rng: Rng;
   private timer: NodeJS.Timeout | null = null;
   private pauseTimer: NodeJS.Timeout | null = null;
+  private collectTimer: NodeJS.Timeout | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private endTimer: NodeJS.Timeout | null = null;
   private dead = false;
@@ -84,6 +90,8 @@ export class Table {
     this.code = init.code;
     this.isPublic = init.isPublic;
     this.target = init.target;
+    this.breakRule = init.breakRule ?? true;
+    this.sandbags = init.sandbags ?? true;
     this.hostId = init.hostId;
     this.timings = init.timings;
     this.hooks = init.hooks;
@@ -212,11 +220,51 @@ export class Table {
     return { ok: true };
   }
 
+  /** Host only, before the game starts: change target / break rule / sandbags. */
+  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean }): Result {
+    if (this.status !== 'waiting') return fail('wrong_state', 'Rules can only be changed before the game starts');
+    if (pid !== this.hostId) return fail('not_allowed', 'Only the host can change the rules');
+    if (patch.target !== undefined) {
+      if (!(CONFIG.tableTargets as readonly number[]).includes(patch.target)) return fail('bad_message', 'Bad target score');
+      this.target = patch.target;
+    }
+    if (patch.breakRule !== undefined) this.breakRule = patch.breakRule;
+    if (patch.sandbags !== undefined) this.sandbags = patch.sandbags;
+    this.broadcast();
+    this.hooks.changed();
+    return { ok: true };
+  }
+
+  /** Host only, before the game starts: fill every open seat with a bot. */
+  addBots(pid: string): Result {
+    if (this.status !== 'waiting') return fail('wrong_state', 'Game already started');
+    if (pid !== this.hostId) return fail('not_allowed', 'Only the host can add bots');
+    this.seats.forEach((s, i) => { if (s.kind === 'empty') this.seatBot(i); });
+    this.broadcast();
+    this.hooks.changed();
+    return { ok: true };
+  }
+
+  /** Host only, before the game starts: rotate the three non-host seats so the host gets a different partner
+   *  (the host keeps seat 1). Each press moves everyone one place; three presses return to the start. */
+  swapPartners(pid: string): Result {
+    if (this.status !== 'waiting') return fail('wrong_state', 'Game already started');
+    if (pid !== this.hostId) return fail('not_allowed', 'Only the host can swap partners');
+    const hostSeat = this.seatOf(pid);
+    const ring = [0, 1, 2, 3].filter((i) => i !== hostSeat);
+    if (hostSeat < 0 || ring.length !== 3) return fail('not_seated', 'Take a seat first');
+    const saved = ring.map((i) => this.seats[i]);
+    ring.forEach((seat, k) => { this.seats[seat] = saved[(k + 2) % 3]; });
+    this.broadcast();
+    this.hooks.changed();
+    return { ok: true };
+  }
+
   /** Fill empty seats with bots and deal. Used by the host, quick-play and tournaments. */
   startGame(): void {
     this.seats.forEach((s, i) => { if (s.kind === 'empty') this.seatBot(i); });
     this.teamHadHumans = [0, 1].map((t) => this.seats.some((s, i) => i % 2 === t && s.kind === 'human')) as [boolean, boolean];
-    this.game = createGame({ target: this.target, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
+    this.game = createGame({ target: this.target, breakRule: this.breakRule, sandbags: this.sandbags, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
     this.status = 'playing';
     this.resetHandFlags();
     this.broadcast();
@@ -276,6 +324,14 @@ export class Table {
 
   private afterPlay(out: PlayOutcome): void {
     const pauseMs = this.fastForward ? 0 : this.timings.trickPauseMs;
+    if (out.trick && pauseMs > 0 && !out.handDone) {
+      // The hand goes on: show the finished trick (and its winner) for a moment, but let the winner lead at once.
+      this.collect = out.trick;
+      if (this.collectTimer) clearTimeout(this.collectTimer);
+      this.collectTimer = setTimeout(() => { this.collect = null; this.collectTimer = null; this.broadcast(); }, pauseMs);
+      this.afterPause();
+      return;
+    }
     if (out.trick && pauseMs > 0) {
       this.pause = out.trick;
       this.broadcast();
@@ -377,6 +433,7 @@ export class Table {
     this.timer = null;
     const g = this.game;
     if (!g || g.phase !== 'handOver' || this.status !== 'playing') return;
+    this.collect = null;
     // Humans who reconnected during the last hand take their seats back now
     for (const s of this.seats) if (s.kind === 'human' && s.connected) s.botControlled = false;
     this.releaseStaleSeats();
@@ -477,6 +534,8 @@ export class Table {
       code: this.code,
       isPublic: this.isPublic,
       target: this.target,
+      rules: { target: this.target, breakRule: this.breakRule, sandbags: this.sandbags },
+      hostSeat: this.hostId ? this.seatOf(this.hostId) : -1,
       phase,
       mySeat: me,
       spectator: me < 0,
@@ -500,6 +559,7 @@ export class Table {
       turn: g && this.status === 'playing' && !this.pause && (g.phase === 'bidding' || g.phase === 'playing') ? g.turn : null,
       trick: this.pause ? this.pause.plays : g ? g.trick : [],
       trickWinner: this.pause ? this.pause.winner : null,
+      collect: this.collect && !this.pause ? { plays: this.collect.plays, winner: this.collect.winner } : null,
       lastTrick: g?.lastTrick ?? null,
       spadesBroken: g ? g.spadesBroken : false,
       scores: g ? g.scores : [0, 0],
@@ -536,8 +596,8 @@ export class Table {
 
   dispose(): void {
     this.dead = true;
-    for (const t of [this.timer, this.pauseTimer, this.idleTimer, this.endTimer]) if (t) clearTimeout(t);
-    this.timer = this.pauseTimer = this.idleTimer = this.endTimer = null;
+    for (const t of [this.timer, this.pauseTimer, this.collectTimer, this.idleTimer, this.endTimer]) if (t) clearTimeout(t);
+    this.timer = this.pauseTimer = this.collectTimer = this.idleTimer = this.endTimer = null;
   }
 
   teamOfSeat(i: number): Team { return teamOf(i); }

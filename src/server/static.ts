@@ -11,6 +11,8 @@ const TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
+  '.ttf': 'font/ttf',
+  '.woff2': 'font/woff2',
 };
 
 export const SECURITY_HEADERS: Record<string, string> = {

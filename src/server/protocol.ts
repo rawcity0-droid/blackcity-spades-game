@@ -7,7 +7,11 @@ import { isCard } from '../engine/cards.js';
 export type ClientMsg =
   | { t: 'hello'; nick: string; token?: string }
   | { t: 'ping' }
-  | { t: 'createTable'; isPublic: boolean; target: number }
+  | { t: 'setNick'; nick: string }
+  | { t: 'createTable'; isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean }
+  | { t: 'setRules'; target?: number; breakRule?: boolean; sandbags?: boolean }
+  | { t: 'addBots' }
+  | { t: 'swapPartners' }
   | { t: 'joinTable'; id: string }
   | { t: 'watchTable'; id: string }
   | { t: 'joinCode'; code: string }
@@ -24,6 +28,11 @@ export type ClientMsg =
   | { t: 'watchTournament'; id: string }
   | { t: 'startTournament' }
   | { t: 'leaveTournament' }
+  | { t: 'createEvent'; tables: number; target?: number }
+  | { t: 'startEvent' }
+  | { t: 'leaveEvent' }
+  | { t: 'goPremium' }
+  | { t: 'restorePremium'; email: string }
   | { t: 'devToggleSubscription' };
 
 export type ErrorCode =
@@ -31,7 +40,10 @@ export type ErrorCode =
   | 'illegal' | 'full' | 'busy' | 'too_many' | 'not_seated' | 'wrong_state';
 
 export const ID_RE = /^[a-f0-9]{8}$/;
-export const CODE_RE = /^[A-Z0-9]{5}$/;
+/** Join codes: CODE_LENGTH characters from CODE_ALPHABET (no 0, O, 1, I, L). Entry is case-insensitive. */
+export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export const CODE_RE = new RegExp('^[A-Z0-9]{' + CONFIG.codeLength + '}$');
+export const EMAIL_RE = /^[^\s@<>]{1,64}@[^\s@<>]{1,190}\.[^\s@<>]{2,24}$/;
 export const TOKEN_RE = /^[a-f0-9]{32}$/;
 
 /** Strip control characters and angle brackets, collapse spaces, cap the length. Clients also use textContent. */
@@ -55,20 +67,42 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
   switch (o.t) {
     case 'hello':
       if (o.token !== undefined && !(str(o.token) && TOKEN_RE.test(o.token))) return bad('Bad token');
-      return { msg: { t: 'hello', nick: sanitizeNick(o.nick), token: o.token as string | undefined } };
+      // An empty nick means "keep / pick a default": the hub keeps a returning player's name or assigns Player####
+      return { msg: { t: 'hello', nick: str(o.nick) && o.nick.trim() ? sanitizeNick(o.nick) : '', token: o.token as string | undefined } };
     case 'ping': case 'quickPlay': case 'startTable': case 'ready': case 'rematch': case 'leaveTable':
     case 'startTournament': case 'leaveTournament': case 'devToggleSubscription':
+    case 'addBots': case 'swapPartners': case 'startEvent': case 'leaveEvent': case 'goPremium':
       return { msg: { t: o.t } as ClientMsg };
     case 'createTable':
       if (typeof o.isPublic !== 'boolean') return bad('isPublic must be boolean');
       if (!(CONFIG.tableTargets as readonly number[]).includes(o.target as number)) return bad('Bad target score');
-      return { msg: { t: 'createTable', isPublic: o.isPublic, target: o.target as number } };
+      if (o.breakRule !== undefined && typeof o.breakRule !== 'boolean') return bad('breakRule must be boolean');
+      if (o.sandbags !== undefined && typeof o.sandbags !== 'boolean') return bad('sandbags must be boolean');
+      return { msg: { t: 'createTable', isPublic: o.isPublic, target: o.target as number,
+        breakRule: o.breakRule as boolean | undefined, sandbags: o.sandbags as boolean | undefined } };
+    case 'setNick':
+      return { msg: { t: 'setNick', nick: sanitizeNick(o.nick) } };
+    case 'setRules':
+      if (o.target !== undefined && !(CONFIG.tableTargets as readonly number[]).includes(o.target as number)) return bad('Bad target score');
+      if (o.breakRule !== undefined && typeof o.breakRule !== 'boolean') return bad('breakRule must be boolean');
+      if (o.sandbags !== undefined && typeof o.sandbags !== 'boolean') return bad('sandbags must be boolean');
+      return { msg: { t: 'setRules', target: o.target as number | undefined,
+        breakRule: o.breakRule as boolean | undefined, sandbags: o.sandbags as boolean | undefined } };
+    case 'createEvent':
+      if (!(CONFIG.eventTableOptions as readonly number[]).includes(o.tables as number)) return bad('Choose 1 to 8 tables');
+      if (o.target !== undefined && !(CONFIG.tableTargets as readonly number[]).includes(o.target as number)) return bad('Bad target score');
+      return { msg: { t: 'createEvent', tables: o.tables as number, target: o.target as number | undefined } };
+    case 'restorePremium': {
+      const email = str(o.email) ? o.email.trim() : '';
+      if (!EMAIL_RE.test(email) || email.length > 254) return bad('Enter a valid email address');
+      return { msg: { t: 'restorePremium', email } };
+    }
     case 'joinTable': case 'watchTable': case 'joinTournament': case 'watchTournament':
       if (!(str(o.id) && ID_RE.test(o.id))) return bad('Bad id');
       return { msg: { t: o.t, id: o.id } as ClientMsg };
     case 'joinCode': case 'watchCode': {
       const code = str(o.code) ? o.code.trim().toUpperCase() : '';
-      if (!CODE_RE.test(code)) return bad('Codes are 5 letters/numbers');
+      if (!CODE_RE.test(code)) return bad(`Codes are ${CONFIG.codeLength} letters/numbers`);
       return { msg: { t: o.t, code } as ClientMsg };
     }
     case 'bid':

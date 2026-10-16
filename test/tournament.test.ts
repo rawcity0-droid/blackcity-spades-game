@@ -126,6 +126,21 @@ test('a human who leaves a running tournament becomes a bot in unplayed matches'
   assert.ok(slots.length > 0);
 });
 
+test('a human who leaves during their LIVE match is not pulled into the next round when their team advances', () => {
+  const host = botHost();
+  const t = new Tournament({ id: 'a', code: 'ABCDE', size: 4, organizerId: 'org', isPublic: true, host, rng: mulberry32(11) });
+  t.join('org', 'Org');
+  t.start('org');
+  const live = host.tables[0];
+  assert.equal(live.status, 'live');
+  t.leave('org'); // leaves while the match is live (the table keeps going with a bot)
+  const orgSide = live.teams.findIndex((tm) => tm?.slots.some((s) => s.name === 'Org' || s.playerId === 'org'));
+  assert.equal(orgSide, -1); // no slot of the match refers to the player any more
+  t.matchResult(live.id, 0, [260, 100]);
+  assert.equal(host.tables.length, 1); // the final had no humans, so it was simulated and no new table was opened
+  assert.equal(t.state, 'finished');
+});
+
 test('roundName labels', () => {
   assert.equal(roundName(16, 0), 'Round of 16');
   assert.equal(roundName(8, 0), 'Quarterfinals');

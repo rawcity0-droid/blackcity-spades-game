@@ -45,6 +45,8 @@ export interface HandResult {
 
 export interface GameState {
   target: number;
+  breakRule: boolean;   // true: spades cannot be led until broken (default). false: lead spades any time.
+  sandbags: boolean;    // true: bags are counted and penalised (default). false: no bag points, no counting, no penalty.
   rng: Rng;
   phase: Phase;
   handNo: number;
@@ -62,9 +64,13 @@ export interface GameState {
   winner: Team | null;
 }
 
-export function createGame(opts: { target?: number; rng?: Rng; dealer?: number } = {}): GameState {
+export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean }
+
+export function createGame(opts: GameOptions = {}): GameState {
   const g: GameState = {
     target: opts.target ?? 500,
+    breakRule: opts.breakRule ?? true,
+    sandbags: opts.sandbags ?? true,
     rng: opts.rng ?? secureRng,
     phase: 'bidding',
     handNo: 0,
@@ -130,7 +136,7 @@ export function legalPlays(g: GameState, seat: number): Card[] {
   const hand = g.hands[seat];
   if (g.trick.length === 0) {
     const onlySpades = hand.every((c) => suitOf(c) === 'S');
-    if (g.spadesBroken || onlySpades) return hand.slice();
+    if (!g.breakRule || g.spadesBroken || onlySpades) return hand.slice();
     return hand.filter((c) => suitOf(c) !== 'S');
   }
   const lead = suitOf(g.trick[0].card);
@@ -191,6 +197,7 @@ export function scoreTeam(
   bids: number[],
   tricks: number[],
   bagsBefore: number,
+  sandbags = true,
 ): { result: TeamHandResult; bagsAfter: number } {
   let bid = 0;
   let won = 0;
@@ -220,10 +227,10 @@ export function scoreTeam(
       contractPoints = -10 * bid;
     }
   }
-  const bagsGained = overtricks + nilTricks;
+  const bagsGained = sandbags ? overtricks + nilTricks : 0;
   let bags = bagsBefore + bagsGained;
   let bagPenalty = 0;
-  while (bags >= BAG_LIMIT) {
+  while (sandbags && bags >= BAG_LIMIT) {
     bags -= BAG_LIMIT;
     bagPenalty -= BAG_PENALTY;
   }
@@ -247,8 +254,8 @@ export function gameWinner(scores: [number, number], target: number): Team | nul
 
 function finishHand(g: GameState): void {
   const bids = g.bids.map((b) => b ?? 0);
-  const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0]);
-  const t1 = scoreTeam([1, 3], bids, g.tricksWon, g.bags[1]);
+  const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0], g.sandbags);
+  const t1 = scoreTeam([1, 3], bids, g.tricksWon, g.bags[1], g.sandbags);
   g.scores = [g.scores[0] + t0.result.delta, g.scores[1] + t1.result.delta];
   g.bags = [t0.bagsAfter, t1.bagsAfter];
   g.lastHand = {
