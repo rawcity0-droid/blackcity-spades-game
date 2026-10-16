@@ -1,0 +1,30 @@
+{
+  "name": "blackcity-spades",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Online partnership Spades with bots, lobby and tournaments (Blackcity LLC, v1)",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/server/index.ts",
+    "dev": "tsx watch src/server/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start:prod": "node dist/server/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "e2e": "tsx scripts/e2e.ts",
+    "screenshots": "tsx scripts/screenshots.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/ws": "^8.18.2",
+    "puppeteer-core": "^25.14.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

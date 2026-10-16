@@ -1,0 +1,5 @@
+
+> blackcity-spades@0.1.0 start
+> tsx src/server/index.ts
+
+Blackcity Spades listening on http://localhost:3000

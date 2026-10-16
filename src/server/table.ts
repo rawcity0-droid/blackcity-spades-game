@@ -1,0 +1,548 @@
+// One Spades table: seats (human or bot), the game, timers, spectators, and per-player views.
+// The server is authoritative. view() gives a seated player only their own hand; spectators and
+// queued players never receive any hand data.
+
+import { CONFIG } from '../config.js';
+import { Card, Rng, secureRng } from '../engine/cards.js';
+import {
+  CompletedTrick, EngineError, GameState, Team, createGame, legalPlays, nextHand, placeBid, playCard,
+  teamOf, PlayOutcome,
+} from '../engine/game.js';
+import { chooseBid, choosePlay } from '../engine/bot.js';
+
+export type SeatKind = 'empty' | 'bot' | 'human';
+export type TableStatus = 'waiting' | 'playing' | 'finished';
+
+export interface SeatInfo {
+  kind: SeatKind;
+  name: string;
+  playerId: string | null;
+  connected: boolean;       // socket is connected (humans only)
+  botControlled: boolean;   // a bot is playing this human's seat until the next hand
+  botActed: boolean;        // the bot has acted for this seat in the current hand
+  disconnectedAt: number | null;
+  ready: boolean;
+}
+
+export type Timings = { -readonly [K in keyof typeof CONFIG.timing]: number };
+export const defaultTimings = (): Timings => ({ ...CONFIG.timing });
+
+export interface TableHooks {
+  send(playerId: string, msg: object): void;
+  changed(): void;
+  destroyed(table: Table, participants: string[]): void;
+  released(playerId: string, table: Table): void;
+  matchOver?(table: Table, winner: Team, scores: [number, number], forfeit: boolean): void;
+}
+
+export interface TableInit {
+  id: string;
+  code: string;
+  isPublic: boolean;
+  target: number;
+  hostId: string | null;
+  timings: Timings;
+  hooks: TableHooks;
+  rng?: Rng;
+  tournament?: { id: string; matchId: string; label: string };
+}
+
+type Result<T = object> = ({ ok: true } & T) | { ok: false; code: string; message: string };
+const fail = (code: string, message: string) => ({ ok: false as const, code, message });
+
+const BOT_NAMES = ['Ace', 'Duke', 'Queenie', 'Jax', 'Maverick', 'Sage', 'Rook', 'Dottie', 'Blaze', 'Nova', 'Pip', 'Otis'];
+
+export class Table {
+  readonly id: string;
+  readonly code: string;
+  readonly isPublic: boolean;
+  readonly target: number;
+  readonly tournament?: { id: string; matchId: string; label: string };
+  hostId: string | null;
+  seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
+  watchers = new Set<string>();
+  waiters: string[] = [];                 // watchers who asked for a seat; seated between hands
+  private waiterNames = new Map<string, string>();
+  game: GameState | null = null;
+  status: TableStatus = 'waiting';
+  pause: CompletedTrick | null = null;
+  forfeit = false;
+  fastForward = false;
+  teamHadHumans: [boolean, boolean] = [false, false];
+
+  private timings: Timings;
+  private hooks: TableHooks;
+  private rng: Rng;
+  private timer: NodeJS.Timeout | null = null;
+  private pauseTimer: NodeJS.Timeout | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private endTimer: NodeJS.Timeout | null = null;
+  private dead = false;
+
+  constructor(init: TableInit) {
+    this.id = init.id;
+    this.code = init.code;
+    this.isPublic = init.isPublic;
+    this.target = init.target;
+    this.hostId = init.hostId;
+    this.timings = init.timings;
+    this.hooks = init.hooks;
+    this.rng = init.rng ?? secureRng;
+    this.tournament = init.tournament;
+  }
+
+  // ---------- seats and people ----------
+
+  seatOf(pid: string): number {
+    return this.seats.findIndex((s) => s.kind === 'human' && s.playerId === pid);
+  }
+  isWatching(pid: string): boolean { return this.watchers.has(pid); }
+  hasPerson(pid: string): boolean { return this.seatOf(pid) >= 0 || this.watchers.has(pid); }
+  private humans(): SeatInfo[] { return this.seats.filter((s) => s.kind === 'human'); }
+  connectedHumans(): number { return this.humans().filter((s) => s.connected).length; }
+  humanCount(): number { return this.humans().length; }
+  participants(): string[] {
+    return [...this.humans().map((s) => s.playerId as string), ...this.watchers];
+  }
+  /** Seats a new player could take right now (empty seats before start, bot seats after). */
+  openSeats(): number {
+    if (this.tournament) return 0;
+    const free = this.seats.filter((s) => s.kind === 'empty' || s.kind === 'bot').length;
+    return Math.max(0, free - this.waiters.length);
+  }
+
+  private botName(): string {
+    const used = new Set(this.seats.map((s) => s.name));
+    const free = BOT_NAMES.filter((n) => !used.has(n));
+    return free.length ? free[Math.floor(this.rng() * free.length)] : 'Bot';
+  }
+
+  /** Put a human directly in a seat (used for tournament match setup and by sit()). */
+  seatHuman(seat: number, pid: string, name: string, connected: boolean): void {
+    this.seats[seat] = { ...emptySeat(), kind: 'human', name, playerId: pid, connected };
+    this.watchers.delete(pid);
+    this.waiters = this.waiters.filter((w) => w !== pid);
+    if (this.hostId === null && !this.tournament) this.hostId = pid;
+  }
+  seatBot(seat: number): void {
+    this.seats[seat] = { ...emptySeat(), kind: 'bot', name: this.botName() };
+  }
+  seatNamedBot(seat: number, name: string): void {
+    this.seats[seat] = { ...emptySeat(), kind: 'bot', name };
+  }
+
+  /** Ask for a seat: immediate if one is free before the game / between hands, otherwise queued. */
+  sit(pid: string, name: string, connected = true): Result<{ queued: boolean }> {
+    if (this.tournament) return fail('not_allowed', 'Tournament tables cannot be joined');
+    if (this.seatOf(pid) >= 0) return { ok: true, queued: false };
+    if (this.waiters.includes(pid)) return { ok: true, queued: true };
+    if (this.openSeats() <= 0) return fail('full', 'This table has no open seat');
+    const betweenHands = this.status !== 'playing' || (this.game?.phase === 'handOver' && !this.pause);
+    if (betweenHands) {
+      const idx = this.seats.findIndex((s) => s.kind === 'empty');
+      const i = idx >= 0 ? idx : this.seats.findIndex((s) => s.kind === 'bot');
+      this.seatHuman(i, pid, name, connected);
+    } else {
+      this.waiters.push(pid);
+      this.waiterNames.set(pid, name);
+      this.watchers.add(pid);
+    }
+    this.afterPeopleChange();
+    return { ok: true, queued: !betweenHands };
+  }
+
+  watch(pid: string): Result {
+    if (this.seatOf(pid) >= 0) return { ok: true };
+    this.watchers.add(pid);
+    this.broadcast();
+    this.hooks.changed();
+    return { ok: true };
+  }
+
+  unwatch(pid: string): void {
+    const had = this.watchers.delete(pid);
+    this.waiters = this.waiters.filter((w) => w !== pid);
+    this.waiterNames.delete(pid);
+    if (had) { this.broadcast(); this.hooks.changed(); }
+  }
+
+  /** A person leaves for good: seated humans become bots (or empty seats before the game starts). */
+  leave(pid: string): void {
+    const i = this.seatOf(pid);
+    if (i < 0) { this.unwatch(pid); return; }
+    if (this.status === 'waiting') this.seats[i] = emptySeat();
+    else this.seatBot(i);
+    if (this.hostId === pid) {
+      const next = this.humans().find((s) => s.connected) ?? this.humans()[0];
+      this.hostId = next ? (next.playerId as string) : null;
+    }
+    this.afterPeopleChange();
+  }
+
+  setConnected(pid: string, connected: boolean): void {
+    const i = this.seatOf(pid);
+    if (i < 0) { if (!connected) this.unwatch(pid); return; }
+    const s = this.seats[i];
+    s.connected = connected;
+    if (!connected) {
+      s.disconnectedAt = Date.now();
+      s.botControlled = true; // a bot plays this seat right away
+    } else {
+      s.disconnectedAt = null;
+      // Retake the seat now if no bot has acted for it this hand (or between hands); otherwise at the next hand
+      const inHand = this.status === 'playing' && (this.game?.phase === 'bidding' || this.game?.phase === 'playing');
+      if (!inHand || !s.botActed) s.botControlled = false;
+    }
+    this.afterPeopleChange();
+  }
+
+  private afterPeopleChange(): void {
+    this.broadcast();
+    this.hooks.changed();
+    this.evaluateAbsence();
+    this.advance();
+  }
+
+  // ---------- starting ----------
+
+  start(pid: string): Result {
+    if (this.status !== 'waiting') return fail('wrong_state', 'Game already started');
+    if (pid !== this.hostId) return fail('not_allowed', 'Only the host can start');
+    this.startGame();
+    return { ok: true };
+  }
+
+  /** Fill empty seats with bots and deal. Used by the host, quick-play and tournaments. */
+  startGame(): void {
+    this.seats.forEach((s, i) => { if (s.kind === 'empty') this.seatBot(i); });
+    this.teamHadHumans = [0, 1].map((t) => this.seats.some((s, i) => i % 2 === t && s.kind === 'human')) as [boolean, boolean];
+    this.game = createGame({ target: this.target, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
+    this.status = 'playing';
+    this.resetHandFlags();
+    this.broadcast();
+    this.hooks.changed();
+    this.evaluateAbsence();
+    this.advance();
+  }
+
+  rematch(pid: string): Result {
+    if (this.tournament) return fail('not_allowed', 'No rematch in a tournament');
+    if (this.status !== 'finished') return fail('wrong_state', 'Game is not finished');
+    if (pid !== this.hostId) return fail('not_allowed', 'Only the host can start a rematch');
+    this.seatWaiters();
+    this.startGame();
+    return { ok: true };
+  }
+
+  ready(pid: string): Result {
+    const i = this.seatOf(pid);
+    if (i < 0) return fail('not_seated', 'You are not seated');
+    this.seats[i].ready = true;
+    this.broadcast();
+    this.advance();
+    return { ok: true };
+  }
+
+  // ---------- actions ----------
+
+  bid(pid: string, bid: number): Result {
+    const g = this.game;
+    const i = this.seatOf(pid);
+    if (i < 0) return fail('not_seated', 'Spectators cannot act');
+    if (!g || this.status !== 'playing' || this.pause) return fail('wrong_state', 'Not now');
+    if (this.seats[i].botControlled) return fail('wrong_state', 'A bot is playing your seat until the next hand');
+    try { placeBid(g, i, bid); } catch (e) { return this.engineFail(e); }
+    this.broadcast();
+    this.advance();
+    return { ok: true };
+  }
+
+  play(pid: string, card: Card): Result {
+    const g = this.game;
+    const i = this.seatOf(pid);
+    if (i < 0) return fail('not_seated', 'Spectators cannot act');
+    if (!g || this.status !== 'playing' || this.pause) return fail('wrong_state', 'Not now');
+    if (this.seats[i].botControlled) return fail('wrong_state', 'A bot is playing your seat until the next hand');
+    let out: PlayOutcome;
+    try { out = playCard(g, i, card); } catch (e) { return this.engineFail(e); }
+    this.afterPlay(out);
+    return { ok: true };
+  }
+
+  private engineFail(e: unknown) {
+    if (e instanceof EngineError) return fail('illegal', e.message);
+    throw e;
+  }
+
+  private afterPlay(out: PlayOutcome): void {
+    const pauseMs = this.fastForward ? 0 : this.timings.trickPauseMs;
+    if (out.trick && pauseMs > 0) {
+      this.pause = out.trick;
+      this.broadcast();
+      this.pauseTimer = setTimeout(() => { this.pause = null; this.pauseTimer = null; this.afterPause(); }, pauseMs);
+      return;
+    }
+    this.afterPause();
+  }
+
+  private afterPause(): void {
+    if (this.dead) return;
+    if (this.game?.phase === 'gameOver') this.finishGame(false);
+    this.broadcast();
+    this.advance();
+  }
+
+  private finishGame(forfeit: boolean): void {
+    if (this.status === 'finished') return;
+    this.status = 'finished';
+    this.forfeit = forfeit;
+    this.clearTimer();
+    this.hooks.changed();
+    const g = this.game as GameState;
+    if (this.tournament && this.hooks.matchOver) {
+      const winner = g.winner as Team;
+      const wait = this.fastForward || forfeit ? Math.min(this.timings.matchEndPauseMs, forfeit ? 2000 : 0) : this.timings.matchEndPauseMs;
+      this.endTimer = setTimeout(() => this.hooks.matchOver?.(this, winner, [g.scores[0], g.scores[1]], forfeit), wait);
+    }
+  }
+
+  /** Tournament forfeit: the other team wins at once. */
+  private forfeitTeam(losing: Team): void {
+    const g = this.game;
+    if (!g || this.status !== 'playing') return;
+    g.winner = (1 - losing) as Team;
+    g.phase = 'gameOver';
+    this.pause = null;
+    this.finishGame(true);
+    this.broadcast();
+  }
+
+  // ---------- driving the game (bots, timers) ----------
+
+  private clearTimer(): void { if (this.timer) clearTimeout(this.timer); this.timer = null; }
+
+  private botControls(i: number): boolean {
+    const s = this.seats[i];
+    return s.kind === 'bot' || (s.kind === 'human' && s.botControlled);
+  }
+
+  /** Decide what happens next: wait for a human, schedule a bot move, or schedule the next hand. */
+  advance(): void {
+    if (this.dead || this.status !== 'playing' || !this.game) return;
+    this.clearTimer();
+    if (this.pause) return;
+    const g = this.game;
+    if (this.connectedHumans() === 0 && !this.fastForward) return; // paused until someone returns (or abandon rules apply)
+    if (g.phase === 'handOver') {
+      const everyoneReady = this.humans().filter((s) => s.connected).every((s) => s.ready);
+      const wait = this.fastForward || everyoneReady ? 0 : this.timings.handPauseMs;
+      this.timer = setTimeout(() => this.startNextHand(), wait);
+      return;
+    }
+    if (g.phase === 'gameOver') return;
+    if (!this.botControls(g.turn)) return; // waiting for a connected human
+    const delay = this.fastForward || this.connectedHumans() === 0 ? 0 : this.timings.botDelayMs;
+    this.timer = setTimeout(() => this.botMove(), delay);
+  }
+
+  private botMove(): void {
+    this.timer = null;
+    const g = this.game;
+    if (!g || this.status !== 'playing' || this.pause || !this.botControls(g.turn)) return;
+    const seat = g.turn;
+    const s = this.seats[seat];
+    try {
+      if (g.phase === 'bidding') {
+        placeBid(g, seat, chooseBid(g, seat));
+        if (s.kind === 'human') s.botActed = true;
+        this.broadcast();
+        this.advance();
+      } else if (g.phase === 'playing') {
+        const out = playCard(g, seat, choosePlay(g, seat));
+        if (s.kind === 'human') s.botActed = true;
+        this.afterPlay(out);
+      }
+    } catch (e) {
+      // Should never happen; fall back to the first legal card so the game cannot stall.
+      if (g.phase === 'playing') this.afterPlay(playCard(g, seat, legalPlays(g, seat)[0]));
+      else throw e;
+    }
+  }
+
+  private resetHandFlags(): void {
+    for (const s of this.seats) { s.ready = false; s.botActed = false; }
+  }
+
+  private startNextHand(): void {
+    this.timer = null;
+    const g = this.game;
+    if (!g || g.phase !== 'handOver' || this.status !== 'playing') return;
+    // Humans who reconnected during the last hand take their seats back now
+    for (const s of this.seats) if (s.kind === 'human' && s.connected) s.botControlled = false;
+    this.releaseStaleSeats();
+    this.seatWaiters();
+    nextHand(g);
+    this.resetHandFlags();
+    this.broadcast();
+    this.hooks.changed();
+    this.advance();
+  }
+
+  private releaseStaleSeats(): void {
+    if (this.waiters.length === 0) return;
+    const now = Date.now();
+    this.seats.forEach((s, i) => {
+      if (s.kind === 'human' && !s.connected && s.disconnectedAt !== null &&
+          now - s.disconnectedAt > this.timings.seatHoldMs && this.waiters.length > 0) {
+        const pid = s.playerId as string;
+        this.seatBot(i);
+        this.hooks.released(pid, this);
+      }
+    });
+  }
+
+  private seatWaiters(): void {
+    while (this.waiters.length > 0) {
+      const i = this.seats.findIndex((s) => s.kind === 'bot' || s.kind === 'empty');
+      if (i < 0) break;
+      const pid = this.waiters.shift() as string;
+      const name = this.waiterNames.get(pid) ?? 'Player';
+      this.waiterNames.delete(pid);
+      this.seatHuman(i, pid, name, true);
+    }
+  }
+
+  // ---------- absence rules (idle tables, tournament forfeits) ----------
+
+  /** Normal tables: destroy when abandoned. Tournament tables: forfeit or fast-forward. */
+  private evaluateAbsence(): void {
+    if (this.dead) return;
+    if (this.tournament) { this.evaluateTournamentAbsence(); return; }
+    if (this.humanCount() === 0) { // nobody left to play for (spectators alone do not keep a table alive)
+      this.setIdle(null, 0);
+      queueMicrotask(() => this.destroy());
+      return;
+    }
+    this.setIdle(this.connectedHumans() === 0, this.timings.emptyTableTtlMs, () => this.destroy());
+  }
+
+  /** Arm (once) or clear the idle timer. */
+  private setIdle(needed: boolean | null, ms: number, fn?: () => void): void {
+    if (!needed) { if (this.idleTimer) clearTimeout(this.idleTimer); this.idleTimer = null; return; }
+    if (this.idleTimer) return; // already counting down
+    this.idleTimer = setTimeout(() => { this.idleTimer = null; fn?.(); }, ms);
+  }
+
+  private teamHumans(t: number): SeatInfo[] {
+    return this.seats.filter((s, i) => i % 2 === t && s.kind === 'human');
+  }
+
+  private evaluateTournamentAbsence(): void {
+    if (this.status !== 'playing') { this.setIdle(null, 0); return; }
+    // Every human of a team left for good: the other team advances (if it has humans)
+    for (const t of [0, 1] as Team[]) {
+      if (this.teamHadHumans[t] && this.teamHumans(t).length === 0 && this.teamHumans(1 - t).length > 0) {
+        this.forfeitTeam(t);
+        return;
+      }
+    }
+    if (this.humanCount() === 0) { this.fastForward = true; this.setIdle(null, 0); return; }
+    const absent = (t: number) => this.teamHadHumans[t] && this.teamHumans(t).every((s) => !s.connected);
+    const needed = this.connectedHumans() === 0 || absent(0) || absent(1);
+    this.setIdle(needed, this.timings.abandonMs, () => {
+      if (this.status !== 'playing') return;
+      if (this.connectedHumans() === 0) { this.fastForward = true; this.advance(); return; }
+      for (const t of [0, 1] as Team[]) if (absent(t)) { this.forfeitTeam(t); return; }
+    });
+  }
+
+  // ---------- views ----------
+
+  private phaseFor(): string {
+    if (this.status === 'waiting' || !this.game) return 'waiting';
+    if (this.pause) return 'playing';
+    return this.game.phase === 'gameOver' ? 'finished' : this.game.phase;
+  }
+
+  /** Snapshot for one person. Only a seated player gets `hand`/`legal`; everyone else sees public info only. */
+  view(pid: string): object {
+    const g = this.game;
+    const me = this.seatOf(pid);
+    const phase = this.phaseFor();
+    const mine = me >= 0 ? this.seats[me] : null;
+    const myTurn = !!g && me >= 0 && g.turn === me && !this.pause && !mine?.botControlled && this.status === 'playing';
+    const view: Record<string, unknown> = {
+      t: 'table',
+      id: this.id,
+      code: this.code,
+      isPublic: this.isPublic,
+      target: this.target,
+      phase,
+      mySeat: me,
+      spectator: me < 0,
+      queued: this.waiters.includes(pid),
+      spectators: this.watchers.size,
+      isHost: pid === this.hostId,
+      openSeats: this.openSeats(),
+      botControlled: !!mine?.botControlled,
+      seats: this.seats.map((s, i) => ({
+        kind: s.kind,
+        name: s.name,
+        connected: s.kind === 'human' ? s.connected : true,
+        botControlled: s.kind === 'human' && s.botControlled,
+        cards: g ? g.hands[i].length : 0,
+        bid: g ? g.bids[i] : null,
+        tricks: g ? g.tricksWon[i] : 0,
+        ready: s.ready,
+      })),
+      dealer: g ? g.dealer : null,
+      handNo: g ? g.handNo : 0,
+      turn: g && this.status === 'playing' && !this.pause && (g.phase === 'bidding' || g.phase === 'playing') ? g.turn : null,
+      trick: this.pause ? this.pause.plays : g ? g.trick : [],
+      trickWinner: this.pause ? this.pause.winner : null,
+      lastTrick: g?.lastTrick ?? null,
+      spadesBroken: g ? g.spadesBroken : false,
+      scores: g ? g.scores : [0, 0],
+      bags: g ? g.bags : [0, 0],
+      lastHand: g?.lastHand ?? null,
+      winner: this.status === 'finished' && g ? g.winner : null,
+      forfeit: this.forfeit,
+      tournament: this.tournament ? { id: this.tournament.id, label: this.tournament.label } : null,
+    };
+    if (g && me >= 0) {
+      view.hand = g.hands[me];
+      view.legal = myTurn && g.phase === 'playing' ? legalPlays(g, me) : [];
+      view.canBid = myTurn && g.phase === 'bidding';
+    }
+    return view;
+  }
+
+  broadcast(): void {
+    if (this.dead) return;
+    for (const s of this.seats) {
+      if (s.kind === 'human' && s.connected) this.hooks.send(s.playerId as string, this.view(s.playerId as string));
+    }
+    for (const w of this.watchers) this.hooks.send(w, this.view(w));
+  }
+
+  // ---------- teardown ----------
+
+  destroy(): void {
+    if (this.dead) return;
+    const people = this.participants();
+    this.dispose();
+    this.hooks.destroyed(this, people);
+  }
+
+  dispose(): void {
+    this.dead = true;
+    for (const t of [this.timer, this.pauseTimer, this.idleTimer, this.endTimer]) if (t) clearTimeout(t);
+    this.timer = this.pauseTimer = this.idleTimer = this.endTimer = null;
+  }
+
+  teamOfSeat(i: number): Team { return teamOf(i); }
+}
+
+function emptySeat(): SeatInfo {
+  return { kind: 'empty', name: '', playerId: null, connected: false, botControlled: false, botActed: false, disconnectedAt: null, ready: false };
+}
