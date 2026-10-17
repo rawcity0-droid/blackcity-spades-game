@@ -55,6 +55,7 @@ test('Go Premium creates a subscription Checkout Session with the documented fie
     assert.equal(req.form.get('mode'), 'subscription');
     assert.equal(req.form.get('line_items[0][price]'), PRICE);
     assert.equal(req.form.get('line_items[0][quantity]'), '1');
+    assert.equal(req.form.get('managed_payments[enabled]'), 'false');
     assert.equal(req.form.get('success_url'), `http://127.0.0.1:${srv.port}/?premium=success&session_id={CHECKOUT_SESSION_ID}`);
     assert.equal(req.form.get('cancel_url'), `http://127.0.0.1:${srv.port}/?premium=cancel`);
     assert.equal(req.form.get('client_reference_id'), welcome.id);

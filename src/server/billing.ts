@@ -119,6 +119,8 @@ export class Billing {
       ['mode', 'subscription'],
       ['line_items[0][price]', this.priceId],
       ['line_items[0][quantity]', '1'],
+      // Stripe's own 400 error on this account says to pass this to turn off Managed Payments (which requires a product tax code) for this session.
+      ['managed_payments[enabled]', 'false'],
       ['success_url', `${base}/?premium=success&session_id={CHECKOUT_SESSION_ID}`], // literal placeholder, Stripe fills it in
       ['cancel_url', `${base}/?premium=cancel`],
       ['client_reference_id', hostId],
