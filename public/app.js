@@ -6,7 +6,7 @@
 import { cardName, renderBack, renderCard } from './cards.js';
 import { s as svg } from './svg.js';
 import { createMusic } from './music.js';
-import { sheetLeaveConfirm, sheetLeaveLabel, tableLeaveConfirm } from './leave-rules.js';
+import { activeGame, canGoBack, navAfterEnd, navAfterSheet, navAfterTable, returnSummary, sheetLeaveConfirm, sheetLeaveLabel, tableLeaveConfirm } from './leave-rules.js';
 import { parseMusicPrefs, serializeMusicPrefs } from './music-state.js';
 
 // ---------- helpers ----------
@@ -73,6 +73,8 @@ const state = {
   subscribed: false,
   connected: false,
   ui: 'home',            // home | table | tournament | event
+  away: false,           // pressed Back: still seated / entered, but looking at home; updates must not pull the view back
+  awayFrom: 'table',     // the screen that Return to game goes back to
   lobby: null,
   table: null,
   tour: null,
@@ -172,7 +174,7 @@ function handle(m) {
       const isNew = !state.table || state.table.id !== m.id;
       state.table = m;
       if (isNew) { closeAllModals(); chatReset(); }
-      if (isNew || (state.ui !== 'tournament' && state.ui !== 'event')) state.ui = 'table'; // a bracket / event view stays put otherwise
+      applyNav(navAfterTable(state, isNew)); // a bracket / event view stays put, and so does home after Back
       if (state.pendingStart && m.phase === 'waiting' && m.isHost) { state.pendingStart = false; send({ t: 'startTable' }); }
       break;
     }
@@ -185,27 +187,29 @@ function handle(m) {
     case 'left':
       state.table = null;
       chatReset();
-      state.ui = state.event ? 'event' : state.tour ? 'tournament' : 'home';
+      applyNav(navAfterEnd(state, state));
       if (m.reason) toast(m.reason);
       break;
     case 'tournament':
       state.tour = m;
-      if (state.ui !== 'table' && (m.joined || state.openSheet)) { state.ui = 'tournament'; closeAllModals(); }
+      if (state.ui !== 'table' && (m.joined || state.openSheet)) { const n = navAfterSheet(state, 'tournament', m.joined, state.openSheet); if (n.ui !== state.ui) closeAllModals(); applyNav(n); }
       state.openSheet = false;
       break;
     case 'tournamentLeft':
       state.tour = null;
       if (state.ui === 'tournament') state.ui = 'home';
+      if (state.away && !activeGame(state)) state.away = false;
       if (m.reason) toast(m.reason);
       break;
     case 'event':
       state.event = m;
-      if (state.ui !== 'table' && (m.joined || state.openSheet)) { state.ui = 'event'; closeAllModals(); }
+      if (state.ui !== 'table' && (m.joined || state.openSheet)) { const n = navAfterSheet(state, 'event', m.joined, state.openSheet); if (n.ui !== state.ui) closeAllModals(); applyNav(n); }
       state.openSheet = false;
       break;
     case 'eventLeft':
       state.event = null;
       if (state.ui === 'event') state.ui = 'home';
+      if (state.away && !activeGame(state)) state.away = false;
       if (m.reason) toast(m.reason);
       break;
     case 'error':
@@ -484,7 +488,9 @@ let homeSig = '';
 
 function renderHome() {
   const root = $('home-layer');
-  const sig = [state.practiceTarget, state.subscribed, state.connected, state.config ? price() : '', state.config && state.config.devUnlock].join('|');
+  const game = activeGame(state);
+  const summary = game ? returnSummary(state, chat.unread) : '';
+  const sig = [state.practiceTarget, state.subscribed, state.connected, state.config ? price() : '', state.config && state.config.devUnlock, game, summary].join('|');
   if (sig === homeSig && root.firstChild) return;
   homeSig = sig;
   const target = state.practiceTarget;
@@ -493,6 +499,8 @@ function renderHome() {
     h('div', { class: 'home-top' },
       h('span', { class: 'brandmark', text: 'BLACKCITY' }),
       h('span', { class: 'tbl-open' + (state.connected ? '' : ' off'), text: state.connected ? 'Table open' : 'Connecting…' })),
+    game ? h('button', { class: 'return-card', type: 'button', onclick: returnToGame },
+      h('span', { class: 'rc-text' }, h('b', { text: 'Return to game' }), h('span', { text: summary })), iconArrow()) : null,
     h('div', { class: 'home-hero' },
       h('div', { class: 'spade-tile' }, spadeShape('', '#2a2a2a')),
       h('h1', { text: 'Spades, built for the table.' })),
@@ -549,6 +557,8 @@ function openPlayModal() {
     h('b', { text: title }), h('span', { text: desc }));
   refs.openTables = h('div', { class: 'open-tables' });
   body.append(
+    activeGame(state) ? h('button', { class: 'return-card on-paper', type: 'button', onclick: () => { closeModal('play'); returnToGame(); } },
+      h('span', { class: 'rc-text' }, h('b', { text: 'Return to game' }), h('span', { text: returnSummary(state, chat.unread) })), iconArrow()) : null,
     h('p', { class: 'lead', text: sub }),
     h('label', { class: 'field-label', for: 'display-name', text: 'Your display name' }),
     nameInput,
@@ -713,19 +723,64 @@ function openRules() {
 // ---------- menu ----------
 function openMenu() {
   if (modalOpen('menu')) { closeModal('menu'); return; }
-  const inTable = !!state.table && (state.ui === 'table');
-  const items = [
-    ['Play Online', openPlayModal],
-    ['Rules', openRules],
-  ];
-  if (state.tour || state.event) items.push([state.event ? 'Tournament view' : 'Bracket view', () => { closeModal('menu'); state.ui = state.event ? 'event' : 'tournament'; render(); }]);
-  if (inTable) items.push(['Leave table', () => { closeModal('menu'); leaveTable(); }]);
+  const inGame = activeGame(state);
+  const items = [];
+  if (inGame && state.ui === 'home') items.push(['Return to game', () => { closeModal('menu'); returnToGame(); }]);
+  items.push(['Play Online', openPlayModal], ['Rules', openRules]);
+  if (state.tour || state.event) items.push([state.event ? 'Tournament view' : 'Bracket view', () => { closeModal('menu'); state.away = false; state.ui = state.event ? 'event' : 'tournament'; render(); }]);
+  if (state.table) items.push(['Leave table', () => { closeModal('menu'); leaveTable(); }]);
+  if (tournamentKind()) items.push(['Leave tournament', () => { closeModal('menu'); leaveTournament(); }]);
   if (!state.subscribed) items.push(['Restore Premium', () => { closeModal('menu'); openRestore(); }]);
   items.push(['Card gallery', () => { location.href = '/cards.html'; }]);
   if (state.config && state.config.devUnlock) items.push(['Dev: toggle Premium', () => { closeModal('menu'); send({ t: 'devToggleSubscription' }); }]);
   const pop = h('div', { class: 'menu-pop', role: 'menu' },
     items.map(([label, fn]) => h('button', { class: 'menu-item', type: 'button', role: 'menuitem', text: label, onclick: fn })));
   openModal('menu', pop, { bare: true });
+}
+
+/** Apply a navigation result from leave-rules.js. */
+function applyNav(n) {
+  state.ui = n.ui;
+  state.away = !!n.away;
+  if (n.away && n.from) state.awayFrom = n.from;
+  homeSig = '';
+}
+
+/** Back: only navigation. The player stays seated / entered and connected; the server keeps the seat and the game goes on. */
+function goBack() {
+  const kind = activeGame(state);
+  if (!kind || state.away) return;
+  state.awayFrom = state.ui === 'tournament' || state.ui === 'event' || state.ui === 'table' ? state.ui : kind;
+  state.away = true;
+  state.ui = 'home';
+  homeSig = '';
+  closeAllModals();
+  render();
+}
+
+/** Return to game: straight back to the same table / bracket / event view with its current state. */
+function returnToGame() {
+  const kind = activeGame(state);
+  if (!kind) { state.away = false; render(); return; }
+  const want = state.awayFrom;
+  state.ui = (want === 'table' && state.table) || (want === 'event' && state.event) || (want === 'tournament' && state.tour) ? want : kind;
+  state.away = false;
+  homeSig = '';
+  closeAllModals();
+  render();
+}
+
+/** 'event' | 'tournament' when the player is entered in one that is still going, else null. */
+const tournamentKind = () => activeGame({ event: state.event, tour: state.tour });
+
+/** Really leave the tournament / event (with the confirm from leave-rules.js). */
+function leaveTournament() {
+  const kind = tournamentKind();
+  if (!kind) return;
+  const x = kind === 'event' ? state.event : state.tour;
+  const ask = sheetLeaveConfirm(x);
+  if (ask && !confirm(ask)) return;
+  send({ t: kind === 'event' ? 'leaveEvent' : 'leaveTournament' });
 }
 
 function leaveTable() {
@@ -1001,7 +1056,7 @@ function seatCard(t, i) {
 }
 
 function hostLobby(t) {
-  const { el, body } = modalCard({ title: 'Play Online', id: 'lobby', cls: 'wide', onClose: leaveTable });
+  const { el, body } = modalCard({ title: 'Play Online', id: 'lobby', cls: 'wide', onClose: t.isHost && t.mySeat >= 0 ? goBack : leaveTable }); // the host's X goes back to the menu without leaving
   const r = t.rules || { target: t.target, breakRule: true, sandbags: true };
   const cfg = state.config || {};
   const targets = cfg.tableTargets || [250, 500];
@@ -1036,7 +1091,7 @@ function hostLobby(t) {
         btn('gold', 'Start', () => send({ t: 'startTable' }), { disabled: !allFilled }))
       : h('div', { class: 'tiny center-text', text: 'Waiting for the host to start…' }),
     host ? h('div', { class: 'tiny center-text', text: 'Add bots or invite players to fill all 4 seats, then start.' }) : null,
-    host ? h('div', { class: 'btn-row' }, btn('outline', '‹ Back', leaveTable)) : null);
+    host ? h('div', { class: 'btn-row' }, btn('outline', '‹ Back', goBack)) : null);
   return el;
 }
 
@@ -1132,11 +1187,11 @@ function renderBracketSheet() {
     sh.append(br);
   }
   const row = h('div', { class: 'btn-row' });
-  if (state.table) row.append(btn('gold', 'Back to my table', () => { state.ui = 'table'; render(); }));
+  if (state.table) row.append(btn('gold', 'Back to my table', () => { state.ui = 'table'; state.away = false; render(); }));
   const ask = sheetLeaveConfirm(T);
   const cancels = T.isOrganizer && T.state === 'registering';
-  row.append(btn(ask ? (cancels || !T.isOrganizer ? 'danger' : 'soft') : 'soft', sheetLeaveLabel(T),
-    () => { if (!ask || confirm(ask)) send({ t: 'leaveTournament' }); }));
+  if (canGoBack(state, 'tournament')) row.append(btn('outline', '‹ Back', goBack)); // the organizer can look around and come back
+  row.append(btn(ask ? (cancels || !T.isOrganizer ? 'danger' : 'soft') : 'soft', sheetLeaveLabel(T), leaveTournament));
   sh.append(row);
   root.append(sh);
 }
@@ -1185,11 +1240,11 @@ function renderEventSheet() {
     sh.append(list);
   }
   const row = h('div', { class: 'btn-row' });
-  if (state.table) row.append(btn('gold', 'Back to my table', () => { state.ui = 'table'; render(); }));
+  if (state.table) row.append(btn('gold', 'Back to my table', () => { state.ui = 'table'; state.away = false; render(); }));
   const ask = sheetLeaveConfirm(E);
   const cancels = E.isOrganizer && E.state === 'registering';
-  row.append(btn(ask ? (cancels || !E.isOrganizer ? 'danger' : 'soft') : 'soft', sheetLeaveLabel(E),
-    () => { if (!ask || confirm(ask)) send({ t: 'leaveEvent' }); }));
+  if (canGoBack(state, 'event')) row.append(btn('outline', '‹ Back', goBack)); // the organizer can look around and come back
+  row.append(btn(ask ? (cancels || !E.isOrganizer ? 'danger' : 'soft') : 'soft', sheetLeaveLabel(E), leaveTournament));
   sh.append(row);
   root.append(sh);
 }
@@ -1262,6 +1317,7 @@ function chatAdd(m) {
   if (!chat.open && !m.mine) chat.unread += 1;
   renderChatList();
   renderChatButton();
+  if (state.ui === 'home' && state.away) renderHome(); // the Return to game button shows new messages
 }
 function openChat() {
   if (!state.table) return;
@@ -1316,13 +1372,13 @@ function renderChatButton() {
   b.setAttribute('aria-label', chat.unread ? `Table chat, ${chat.unread} unread` : 'Table chat');
 }
 $('back-btn').append(icon(['M19 12H5', 'M11 6l-6 6 6 6'], 18), h('span', { text: 'Back' }));
-$('back-btn').addEventListener('click', leaveTable);
+$('back-btn').addEventListener('click', goBack);
 $('chat-btn').addEventListener('click', () => (chat.open ? closeChat() : openChat()));
 function renderDock(t) {
   renderMusic();
   // Back: the host's way out of a table screen (leave with the host hand-over / close described in leave-rules.js)
   const back = $('back-btn');
-  const showBack = !!t && t.isHost && t.mySeat >= 0 && !t.tournament;
+  const showBack = !!t && canGoBack(state, 'table');
   back.classList.toggle('hidden', !showBack);
   $('footbar').classList.toggle('has-back', showBack);
   const show = !!t; // chat belongs to the table you are seated at or watching

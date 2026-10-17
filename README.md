@@ -151,18 +151,36 @@ Dashboard and wait for the re-check). The automated tests and `npm run e2e:prod`
 the message returns `not_allowed` and the endpoint returns 404. With `DEV_UNLOCK=1` and no Stripe keys, Go Premium and Restore Premium just flip
 the flag (nothing is verified, no payment).
 
-## Back button (host / organizer)
+## Back, Return to game and Leave
 
-The host of a table gets a **Back** button in the bar under the hand (and a "‹ Back" button in the host lobby). It is the same as Leave table and
-asks first when leaving would affect other people (texts in `public/leave-rules.js`, unit tested); the server rules are unchanged:
+Going back and leaving are two different things, so you can go back and forth in the same game:
 
-- Other people seated: "Go back? *Name* becomes the host and the table stays open for them." (before the start) or "Go back? A bot takes your seat and *Name*
-  becomes the host. The game goes on for the others." (mid-game). The host passes to the first connected human in seat order.
-- Host is the only person playing: "Go back? You are the only person playing, so this game ends and the table closes." (adds "...closes for the N people
-  watching" when there are watchers; watchers are sent back with "The table closed"). A practice game says "Your practice game will end."
-- An organizer's button in the bracket / tournament view is **Back**: before the start it cancels the tournament for everyone who joined
-  ("Go back? You are the organizer, so the tournament is cancelled for everyone who joined."); once running a bot takes the organizer's place and it goes on.
-- Players and watchers keep their existing Leave table / Leave tournament behavior.
+- **Back** (the host's button in the bar under the hand, the host lobby's "‹ Back" and its X, and the organizer's "‹ Back" in the bracket / tournament
+  view) only changes your screen. It sends nothing to the server and asks nothing: you stay seated and connected, the game goes on, and you are still
+  the host / organizer. It takes you to the home screen.
+- **Return to game** is a prominent gold button at the top of the home screen (also at the top of Play Online, and the first item in the menu) while you
+  are in a table, a tournament or an event. It shows where things stand ("Your turn", "Hand 3", "Waiting to start", "Tournament · in play", plus
+  "· N new messages") and takes you straight back to the same table or bracket with the current state.
+- **Leave** is the menu's **Leave table** / **Leave tournament** (and the bracket view's "Leave tournament" button). It asks first when it affects
+  other people, then really leaves. The texts are in `public/leave-rules.js` (unit tested) and the server rules are unchanged:
+  - Other people seated: "Leave this table? *Name* becomes the host and the table stays open for them." (before the start) or "Leave this table? A bot
+    takes your seat and *Name* becomes the host. The game goes on for the others." (mid-game). The host passes to the first connected human in seat order.
+  - Host is the only person playing: "Leave this table? You are the only person playing, so this game ends and the table closes." (adds the number of
+    people watching; watchers are sent back with "The table closed"). A practice game says "Your practice game will end."
+  - An organizer leaving a tournament before the start cancels it for everyone who joined; once it runs a bot takes the organizer's place.
+
+How it works: Back is client-only. The server keeps sending `table` / `tournament` / `event` updates and chat to a seated player no matter which screen
+they are looking at, and the client keeps the latest state, so Return to game needs nothing from the server. A new table (for example the next
+tournament round) opens by itself even when you are on the home screen. Others at the table, and watchers, see no difference.
+
+Things to know:
+
+- There is no turn timer for connected players. If you are away on your turn the table waits for you (the others can chat, but the hand does not move).
+  The idle rules only apply to people who disconnect (closed tab, lost connection): a bot plays for them at once, a tournament forfeits after
+  `abandonMs`, a free seat can be released to a waiter after `seatHoldMs`, and an empty table closes after `emptyTableTtlMs`. Leave your table first if you
+  want to play Practice or join another one (Practice / Play Online on the home screen say "Leave your current table first").
+- Reloading the page resumes you with your saved token: the server sends the table again with your seat, host role and chat history, and you land
+  on the table. Return to game is only needed within one page load.
 
 ## Spectating
 

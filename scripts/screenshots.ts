@@ -272,6 +272,34 @@ async function main() {
     await page.evaluate(() => (document.querySelector('.chat-x') as HTMLElement).click());
     const hidden = await page.$eval('#chat-sheet', (e) => e.classList.contains('hidden'));
     if (!hidden) throw new Error('chat did not close');
+
+    // Back is navigation only: the host goes home but stays seated; Return to game comes back to the same table; Leave still confirms
+    await page.evaluate(() => { (window as any).__confirms = []; window.confirm = (m) => { (window as any).__confirms.push(m); return false; }; });
+    await page.click('#back-btn');
+    await page.waitForSelector('.home-card .return-card');
+    await say(guest, 'Back soon?'); // an update arrives while the host is away
+    await page.waitForFunction(() => /new message/.test(document.querySelector('.return-card')?.textContent ?? ''));
+    await sleep(300);
+    const away = await page.evaluate(() => ({
+      home: !document.getElementById('home-layer')!.classList.contains('hidden'),
+      confirms: (window as any).__confirms.length,
+      card: document.querySelector('.return-card')?.textContent,
+    }));
+    console.log('host went Back:', JSON.stringify(away));
+    if (!away.home || away.confirms) throw new Error('Back should only navigate: ' + JSON.stringify(away));
+    await shot(page, 'ui-ph390-home-return-to-game.png');
+    await page.evaluate(() => (document.querySelector('.return-card') as HTMLElement).click());
+    await page.waitForSelector('.hand .cbtn');
+    const back = await page.evaluate(() => ({ home: !document.getElementById('home-layer')!.classList.contains('hidden'), cards: document.querySelectorAll('.hand .cbtn').length, back: !document.getElementById('back-btn')!.classList.contains('hidden'), host: !!document.querySelector('.hand') }));
+    console.log('host returned:', JSON.stringify(back));
+    if (back.home || back.cards < 1 || !back.back) throw new Error('Return to game did not restore the table: ' + JSON.stringify(back));
+    // the menu's Leave table still asks (and "Cancel" keeps the seat)
+    await menuItem(page, 'Leave table');
+    const asked = await page.evaluate(() => (window as any).__confirms as string[]);
+    console.log('Leave table asked:', JSON.stringify(asked));
+    if (asked.length !== 1 || !/^Leave this table\? A bot takes your seat and Gus becomes the host/.test(asked[0])) throw new Error('unexpected leave confirm: ' + JSON.stringify(asked));
+    await sleep(300);
+    if (await page.$eval('#home-layer', (e) => !e.classList.contains('hidden'))) throw new Error('declining the confirm must keep the player at the table');
     await viewer.close();
     await guest.close();
     await page.evaluate(() => { window.confirm = () => true; });
@@ -297,11 +325,17 @@ async function main() {
     await page.waitForSelector('.bracket');
     await sleep(300);
     await shot(page, 'ui-ph390-20-bracket.png');
-    await page.evaluate(() => { window.confirm = () => true; });
+    // the organizer's Back on the bracket only navigates: Return to game brings the bracket back, still organizer, no confirm
+    await page.evaluate(() => { (window as any).__confirms = 0; window.confirm = () => { (window as any).__confirms++; return true; }; });
+    await clickText(page, '.btn', '‹ Back');
+    await page.waitForSelector('.home-card .return-card');
+    await page.evaluate(() => (document.querySelector('.return-card') as HTMLElement).click());
+    await page.waitForSelector('.bracket');
+    if (await page.evaluate(() => (window as any).__confirms)) throw new Error('organizer Back must not ask');
     await clickText(page, '.btn', 'Back to my table');
     await menuItem(page, 'Leave table');
     await page.waitForSelector('.sheet');
-    await clickText(page, '.btn', 'Back');
+    await clickText(page, '.btn', 'Leave tournament');
     await page.waitForSelector('.home-card');
     await page.close();
 
@@ -336,10 +370,16 @@ async function main() {
     await sleep(300);
     await shot(page, 'ui-ph390-23-tournament-running.png');
     await ej.close();
+    await page.evaluate(() => { (window as any).__confirms = 0; window.confirm = () => { (window as any).__confirms++; return true; }; });
+    await clickText(page, '.btn', '‹ Back');
+    await page.waitForSelector('.home-card .return-card');
+    await page.evaluate(() => (document.querySelector('.return-card') as HTMLElement).click());
+    await page.waitForSelector('.eventtables');
+    if (await page.evaluate(() => (window as any).__confirms)) throw new Error('organizer Back must not ask');
     await clickText(page, '.btn', 'Back to my table');
     await menuItem(page, 'Leave table');
     await page.waitForSelector('.sheet');
-    await clickText(page, '.btn', 'Back');
+    await clickText(page, '.btn', 'Leave tournament');
     await page.waitForSelector('.home-card');
     await page.close();
 

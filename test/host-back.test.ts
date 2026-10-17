@@ -93,3 +93,55 @@ test('organizer goes back before the start: the tournament is cancelled for ever
     assert.equal((await g2.waitFor((m) => m.t === 'eventLeft', 8000, true)).reason, 'The organizer cancelled the tournament');
   } finally { await srv.close(); }
 });
+
+// ---------- Back is client-only: the host stays seated and connected ----------
+
+test('a host who only looks at another screen stays seated and host, keeps receiving updates, and is never put under bot control', async () => {
+  const srv = await testServer({ devUnlock: true, timings: { botDelayMs: 5, handPauseMs: 20 } });
+  try {
+    const { host, table, guests } = await hostWithGuests(srv, ['Gus']);
+    host.send({ t: 'addBots' });
+    host.send({ t: 'startTable' });
+    await guests[0].waitFor((m) => m.t === 'table' && m.phase === 'bidding');
+    // the Back button sends nothing: the host connection simply stays quiet. Updates and chat still reach it.
+    const before = host.log.length;
+    guests[0].send({ t: 'chat', text: 'are you there?' });
+    await host.waitFor((m) => m.t === 'chatMsg' && m.text === 'are you there?');
+    await sleep(100);
+    assert.ok(host.log.length > before);
+    const t = srv.hub['tables'].get(table.id);
+    assert.equal(t.hostId, srv.hub['players'].get(t.seats[0].playerId).id);
+    assert.equal(t.seats[0].kind, 'human');
+    assert.equal(t.seats[0].connected, true);
+    assert.equal(t.seats[0].botControlled, false, 'no bot takes the seat of a connected player');
+    // the host's latest snapshot is the table's current state, so Return to game shows it with nothing to fetch
+    const mine = lastTable(host);
+    const theirs = lastTable(guests[0]);
+    assert.equal(mine.isHost, true);
+    assert.equal(mine.mySeat, 0);
+    assert.equal(mine.handNo, theirs.handNo);
+    assert.equal(mine.phase, theirs.phase);
+    assert.equal(mine.turn, theirs.turn);
+    assert.ok(Array.isArray(mine.hand));
+  } finally { await srv.close(); }
+});
+
+test('a page reload (same token) resumes the same seat, host role and chat history', async () => {
+  const srv = await testServer({ devUnlock: true });
+  try {
+    const { host, table, guests } = await hostWithGuests(srv, ['Gus']);
+    const token = host.last.welcome.token;
+    host.send({ t: 'chat', text: 'before the reload' });
+    await guests[0].waitFor((m) => m.t === 'chatMsg');
+    host.ws.terminate();
+    await sleep(60);
+    const again = await connect(srv.port, 'Hosty', token);
+    assert.equal(again.welcome.resumed, true);
+    const v = await again.c.waitFor((m) => m.t === 'table', 8000, true);
+    assert.equal(v.id, table.id);
+    assert.equal(v.mySeat, 0);
+    assert.equal(v.isHost, true);
+    const hist = await again.c.waitFor((m) => m.t === 'chatHistory', 8000, true);
+    assert.equal(hist.msgs.at(-1).text, 'before the reload');
+  } finally { await srv.close(); }
+});
