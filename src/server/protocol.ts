@@ -8,7 +8,7 @@ export type ClientMsg =
   | { t: 'hello'; nick: string; token?: string }
   | { t: 'ping' }
   | { t: 'setNick'; nick: string }
-  | { t: 'createTable'; isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean }
+  | { t: 'createTable'; isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; practice?: boolean }
   | { t: 'setRules'; target?: number; breakRule?: boolean; sandbags?: boolean }
   | { t: 'addBots' }
   | { t: 'swapPartners' }
@@ -33,11 +33,12 @@ export type ClientMsg =
   | { t: 'leaveEvent' }
   | { t: 'goPremium' }
   | { t: 'restorePremium'; email: string }
+  | { t: 'confirmPremium'; sessionId: string }
   | { t: 'devToggleSubscription' };
 
 export type ErrorCode =
   | 'bad_message' | 'rate_limited' | 'not_hello' | 'upgrade_required' | 'not_found' | 'not_allowed'
-  | 'illegal' | 'full' | 'busy' | 'too_many' | 'not_seated' | 'wrong_state';
+  | 'illegal' | 'full' | 'busy' | 'too_many' | 'not_seated' | 'wrong_state' | 'name_required';
 
 export const ID_RE = /^[a-f0-9]{8}$/;
 /** Join codes: CODE_LENGTH characters from CODE_ALPHABET (no 0, O, 1, I, L). Entry is case-insensitive. */
@@ -46,12 +47,13 @@ export const CODE_RE = new RegExp('^[A-Z0-9]{' + CONFIG.codeLength + '}$');
 export const EMAIL_RE = /^[^\s@<>]{1,64}@[^\s@<>]{1,190}\.[^\s@<>]{2,24}$/;
 export const TOKEN_RE = /^[a-f0-9]{32}$/;
 
-/** Strip control characters and angle brackets, collapse spaces, cap the length. Clients also use textContent. */
+/** Strip control characters and markup characters, collapse spaces, cap the length. Returns '' when nothing is left:
+ *  there is never a default or generated name. Clients also use textContent. */
 export function sanitizeNick(raw: unknown): string {
   let s = typeof raw === 'string' ? raw : '';
   s = s.normalize('NFKC').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff<>&"'`\\]/g, '');
   s = s.replace(/\s+/g, ' ').trim().slice(0, CONFIG.limits.maxNickLength).trim();
-  return s || 'Player' + Math.floor(1000 + Math.random() * 9000);
+  return s;
 }
 
 const str = (v: unknown): v is string => typeof v === 'string';
@@ -67,8 +69,8 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
   switch (o.t) {
     case 'hello':
       if (o.token !== undefined && !(str(o.token) && TOKEN_RE.test(o.token))) return bad('Bad token');
-      // An empty nick means "keep / pick a default": the hub keeps a returning player's name or assigns Player####
-      return { msg: { t: 'hello', nick: str(o.nick) && o.nick.trim() ? sanitizeNick(o.nick) : '', token: o.token as string | undefined } };
+      // An empty nick means "no name": a returning player keeps their saved name, a new one has none (no default is ever assigned)
+      return { msg: { t: 'hello', nick: sanitizeNick(o.nick), token: o.token as string | undefined } };
     case 'ping': case 'quickPlay': case 'startTable': case 'ready': case 'rematch': case 'leaveTable':
     case 'startTournament': case 'leaveTournament': case 'devToggleSubscription':
     case 'addBots': case 'swapPartners': case 'startEvent': case 'leaveEvent': case 'goPremium':
@@ -78,8 +80,9 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (!(CONFIG.tableTargets as readonly number[]).includes(o.target as number)) return bad('Bad target score');
       if (o.breakRule !== undefined && typeof o.breakRule !== 'boolean') return bad('breakRule must be boolean');
       if (o.sandbags !== undefined && typeof o.sandbags !== 'boolean') return bad('sandbags must be boolean');
+      if (o.practice !== undefined && typeof o.practice !== 'boolean') return bad('practice must be boolean');
       return { msg: { t: 'createTable', isPublic: o.isPublic, target: o.target as number,
-        breakRule: o.breakRule as boolean | undefined, sandbags: o.sandbags as boolean | undefined } };
+        breakRule: o.breakRule as boolean | undefined, sandbags: o.sandbags as boolean | undefined, practice: o.practice as boolean | undefined } };
     case 'setNick':
       return { msg: { t: 'setNick', nick: sanitizeNick(o.nick) } };
     case 'setRules':
@@ -92,9 +95,11 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (!(CONFIG.eventTableOptions as readonly number[]).includes(o.tables as number)) return bad('Choose 1 to 8 tables');
       if (o.target !== undefined && !(CONFIG.tableTargets as readonly number[]).includes(o.target as number)) return bad('Bad target score');
       return { msg: { t: 'createEvent', tables: o.tables as number, target: o.target as number | undefined } };
+    case 'confirmPremium': // validated by the hub, which answers every attempt with exactly one premiumResult
+      return { msg: { t: 'confirmPremium', sessionId: str(o.sessionId) ? o.sessionId.trim().slice(0, 300) : '' } };
     case 'restorePremium': {
-      const email = str(o.email) ? o.email.trim() : '';
-      if (!EMAIL_RE.test(email) || email.length > 254) return bad('Enter a valid email address');
+      // Not validated here: the hub answers every attempt with exactly one restoreResult (bad_email, not_found, rate_limited or ok)
+      const email = str(o.email) ? o.email.trim().toLowerCase().slice(0, 300) : '';
       return { msg: { t: 'restorePremium', email } };
     }
     case 'joinTable': case 'watchTable': case 'joinTournament': case 'watchTournament':

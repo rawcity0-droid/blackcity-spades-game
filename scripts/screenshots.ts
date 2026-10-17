@@ -5,6 +5,8 @@
 import fs from 'node:fs';
 import puppeteer, { Browser, Page } from 'puppeteer-core';
 import { startServer } from '../src/server/server.js';
+import { Billing } from '../src/server/billing.js';
+import { MockStripe, PRICE, SECRET } from '../test/mock-stripe.js';
 
 const CHROME = process.env.CHROME ?? '/usr/bin/google-chrome';
 const OUT = new URL('../screenshots/', import.meta.url).pathname;
@@ -43,6 +45,12 @@ async function newPage(browser: Browser, base: string, s: { width: number; heigh
   await page.waitForSelector('.home-card');
   await page.waitForFunction(() => document.querySelector('.tbl-open')?.textContent === 'Table open');
   return page;
+}
+
+async function setName(page: Page, name: string) {
+  await page.waitForSelector('#display-name');
+  await page.type('#display-name', name);
+  await page.evaluate(() => (document.querySelector('#display-name') as HTMLElement).blur());
 }
 
 async function menuItem(page: Page, label: string) {
@@ -92,9 +100,9 @@ async function main() {
       const t0 = Date.now();
       while ((!gotMid || !gotDone) && Date.now() - t0 < 120000) {
         const s = await state(page);
-        if (!gotMid && s.tc === 3 && s.legal > 0 && !/takes the trick/.test(s.status)) { await sleep(120); await shot(page, `ui-${sz.tag}-03-mid-trick.png`); gotMid = true; await playLegal(page); continue; }
+        if (!gotMid && s.tc >= 2 && s.tc <= 3 && s.legal > 0 && !/takes the trick/.test(s.status)) { await sleep(120); await shot(page, `ui-${sz.tag}-03-mid-trick.png`); gotMid = true; await playLegal(page); continue; }
         if (!gotDone && /takes the trick/.test(s.status) && s.tc === 4) { await sleep(260); await shot(page, `ui-${sz.tag}-04-trick-complete.png`); gotDone = true; continue; }
-        if (s.legal > 0 && s.tc < 3 && !/takes the trick/.test(s.status)) await playLegal(page);
+        if (s.legal > 0 && s.tc < 2 && !/takes the trick/.test(s.status)) await playLegal(page);
         await sleep(60);
       }
       if (!gotMid || !gotDone) throw new Error(`${sz.tag}: mid=${gotMid} done=${gotDone}`);
@@ -103,10 +111,10 @@ async function main() {
 
     // --- phone flow: modals, host lobby, premium gate, restore ---
     const P = { width: 390, height: 844, mobile: true };
-    page = await newPage(browser, base, P, 'raw');
+    page = await newPage(browser, base, P, 'main');
     await clickText(page, '.bigbtn', 'Play Online');
     await page.waitForSelector('.tiles');
-    await page.type('#display-name', 'Raw');
+    await page.type('#display-name', 'Avery');
     await page.evaluate(() => (document.querySelector('#display-name') as HTMLElement).blur());
     // profile photo: draw a test picture, upload it through the file input
     const png = await page.evaluate(() => {
@@ -182,6 +190,7 @@ async function main() {
     // spectator on a phone, watching that table by its code
     const viewer = await newPage(browser, base, P, 'view');
     await clickText(viewer, '.bigbtn', 'Play Online');
+    await setName(viewer, 'Vic');
     await viewer.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Watch Table')))!.click());
     await viewer.waitForSelector('#code-input');
     await viewer.type('#code-input', code);
@@ -197,7 +206,7 @@ async function main() {
     await page.close();
 
     // --- bracket (Create Bracket) ---
-    page = await newPage(browser, base, P, 'raw'); // same token: Premium stays on
+    page = await newPage(browser, base, P, 'main'); // same token: Premium stays on
     await clickText(page, '.bigbtn', 'Play Online');
     await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Create Bracket')))!.click());
     await page.waitForSelector('.modal.small');
@@ -222,7 +231,7 @@ async function main() {
     await page.close();
 
     // --- Create Tournament (one to eight tables) ---
-    page = await newPage(browser, base, P, 'raw');
+    page = await newPage(browser, base, P, 'main');
     await page.evaluate(() => { window.confirm = () => true; });
     await clickText(page, '.pill-gold', 'Host a Tournament');
     await page.waitForSelector('.modal.small');
@@ -233,6 +242,7 @@ async function main() {
     const ecode = await page.$eval('.cb-code', (e) => e.textContent!);
     const ej = await newPage(browser, base, P, 'ej');
     await clickText(ej, '.bigbtn', 'Play Online');
+    await setName(ej, 'Eve');
     await ej.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join Tournament')))!.click());
     await ej.waitForSelector('#code-input');
     await ej.type('#code-input', ecode);
@@ -261,6 +271,74 @@ async function main() {
     await sleep(150);
     await shot(page, 'ui-ph390-24-host-tournament-gate.png');
     await page.close();
+
+
+    // --- display name: a brand-new visitor sees an empty field; joining without a name is blocked ---
+    page = await newPage(browser, base, P, 'newbie');
+    await clickText(page, '.bigbtn', 'Play Online');
+    await page.waitForSelector('#display-name');
+    const prefilled = await page.$eval('#display-name', (e) => (e as HTMLInputElement).value);
+    const placeholder = await page.$eval('#display-name', (e) => (e as HTMLInputElement).placeholder);
+    const ac = await page.$eval('#display-name', (e) => (e as HTMLInputElement).autocomplete);
+    if (prefilled !== '' || placeholder !== 'Enter your name' || ac !== 'off') throw new Error(`name field: value=${prefilled} placeholder=${placeholder} autocomplete=${ac}`);
+    await sleep(200);
+    await shot(page, 'ui-ph390-name-blank.png');
+    await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join Table')))!.click());
+    await page.waitForFunction(() => !document.querySelector('#name-error')?.hasAttribute('hidden'));
+    const focused = await page.evaluate(() => document.activeElement?.id);
+    if (focused !== 'display-name') throw new Error('name input not focused: ' + focused);
+    await sleep(200);
+    await shot(page, 'ui-ph390-name-required.png');
+    await page.close();
+
+    // --- production mode (no DEV_UNLOCK): Restore Premium with an owner email, then Create Table is unlocked ---
+    const prod = await startServer({ port: 0, host: '127.0.0.1', ownerEmails: ['owner@example.test'], timings: { botDelayMs: 650, trickPauseMs: 1500, handPauseMs: 60000, matchEndPauseMs: 30000 } });
+    const pbase = `http://127.0.0.1:${prod.port}`;
+    page = await newPage(browser, pbase, P, 'rs');
+    await clickText(page, '.bigbtn', 'Play Online');
+    await setName(page, 'Avery');
+    await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Create Table')))!.click());
+    await page.waitForSelector('.modal.small');
+    await clickText(page, '.btn', 'Restore Premium / I’m the owner');
+    await page.waitForSelector('#restore-email');
+    await page.type('#restore-email', 'someone@example.test');
+    await clickText(page, '.modal.small .btn', 'Restore Premium');
+    await page.waitForSelector('#restore-msg:not([hidden])');
+    await sleep(200);
+    await shot(page, 'ui-ph390-restore-not-found.png');
+    await page.$eval('#restore-email', (e) => { (e as HTMLInputElement).value = ''; e.dispatchEvent(new Event('input')); });
+    await page.type('#restore-email', ' Owner@Example.test ');
+    await clickText(page, '.modal.small .btn', 'Restore Premium');
+    await page.waitForFunction(() => !document.querySelector('#restore-email') && /Premium active/.test(document.querySelector('.modal .lead')?.textContent ?? ''));
+    await sleep(500);
+    await shot(page, 'ui-ph390-restore-success.png');
+    await page.close();
+    await prod.close();
+
+    // --- Stripe return (mocked Stripe): confirming -> "Premium is active", and the cancel note ---
+    const mock = await new MockStripe().start();
+    mock.addCustomer('cus_demo', 'demo@example.test');
+    mock.addSub('sub_demo', 'cus_demo', 'active');
+    mock.addSession({ id: 'cs_test_shotsession1234567890', customer: 'cus_demo', sub: 'sub_demo' });
+    const sp = await startServer({ port: 0, host: '127.0.0.1', billing: new Billing({ secretKey: SECRET, priceId: PRICE, apiBase: mock.url }) });
+    page = await browser.newPage();
+    await page.setViewport({ width: P.width, height: P.height, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await page.goto(`http://127.0.0.1:${sp.port}/?slot=ret&premium=success&session_id=cs_test_shotsession1234567890`, { waitUntil: 'load' });
+    await page.waitForFunction(() => /Premium is active/.test(document.querySelector('.modal .lead')?.textContent ?? ''));
+    await sleep(300);
+    const cleaned = await page.evaluate(() => location.search);
+    if (/premium|session_id/.test(cleaned)) throw new Error('query params not stripped: ' + cleaned);
+    await shot(page, 'ui-ph390-premium-return-success.png');
+    await page.close();
+    page = await browser.newPage();
+    await page.setViewport({ width: P.width, height: P.height, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await page.goto(`http://127.0.0.1:${sp.port}/?slot=ret2&premium=cancel`, { waitUntil: 'load' });
+    await page.waitForSelector('.toast');
+    await sleep(300);
+    await shot(page, 'ui-ph390-premium-return-cancel.png');
+    await page.close();
+    await sp.close();
+    await mock.stop();
 
     // --- desktop 1280x800 ---
     const D = { width: 1280, height: 800, mobile: false };

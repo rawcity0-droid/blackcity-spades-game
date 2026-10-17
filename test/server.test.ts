@@ -52,12 +52,12 @@ test('validation: bad JSON, unknown type, oversize message, nickname sanitizing'
   } finally { await srv.close(); }
 });
 
-test('sanitizeNick: trims, caps length, removes markup characters, never empty', () => {
+test('sanitizeNick: trims, caps length, removes markup characters, may be empty (there is no default name)', () => {
   assert.equal(sanitizeNick('  A   B  '), 'A B');
   assert.equal(sanitizeNick('x'.repeat(100)).length, CONFIG.limits.maxNickLength);
   assert.equal(sanitizeNick('<b>hi</b>'), 'bhi/b');
-  assert.match(sanitizeNick('   '), /^Player\d{4}$/);
-  assert.match(sanitizeNick(42), /^Player\d{4}$/);
+  assert.equal(sanitizeNick('   '), '');
+  assert.equal(sanitizeNick(42), '');
 });
 
 test('rate limiting: a flood of messages gets rate_limited errors', async () => {
@@ -104,7 +104,7 @@ test('free tier: private tables and hosting tournaments need the host subscripti
   } finally { await srv.close(); }
 });
 
-test('dev toggle and endpoint are disabled unless DEV_UNLOCK is set; billing routes are stubs', async () => {
+test('dev toggle and endpoint are disabled unless DEV_UNLOCK is set; there are no /billing HTTP routes (no webhook)', async () => {
   const srv = await testServer({ devUnlock: false });
   try {
     const { c, welcome } = await connect(srv.port, 'Nope');
@@ -114,8 +114,7 @@ test('dev toggle and endpoint are disabled unless DEV_UNLOCK is set; billing rou
     const r = await fetch(`http://127.0.0.1:${srv.port}/dev/subscription`, { method: 'POST', body: JSON.stringify({ token: welcome.token }) });
     assert.equal(r.status, 404);
     const b = await fetch(`http://127.0.0.1:${srv.port}/billing/checkout`, { method: 'POST' });
-    assert.equal(b.status, 501);
-    assert.equal((await b.json()).error, 'not_implemented');
+    assert.ok(b.status === 404 || b.status === 405, String(b.status));
     const h = await fetch(`http://127.0.0.1:${srv.port}/healthz`);
     assert.equal(await h.text(), 'ok');
     const trav = await fetch(`http://127.0.0.1:${srv.port}/..%2f..%2fpackage.json`);

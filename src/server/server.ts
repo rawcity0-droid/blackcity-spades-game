@@ -1,12 +1,11 @@
 // HTTP + WebSocket server. Static files from public/, WebSocket at /ws, a /healthz probe,
-// stubbed /billing/* routes (501) and a dev-only subscription endpoint (404 unless DEV_UNLOCK is set).
+// and a dev-only subscription endpoint (404 unless DEV_UNLOCK is set). Billing runs over the WebSocket (see hub.ts / billing.ts).
 
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { CONFIG } from '../config.js';
-import * as billing from './billing.js';
 import { Hub, HubOptions } from './hub.js';
 import { SECURITY_HEADERS, serveStatic } from './static.js';
 
@@ -36,6 +35,15 @@ function json(res: http.ServerResponse, status: number, body: object): void {
   res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' }).end(JSON.stringify(body));
 }
 
+/** Public origin of this server as the browser sees it (behind Render's proxy: x-forwarded-*), for Stripe return URLs. */
+export function originOf(req: http.IncomingMessage): string {
+  const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v ?? '').split(',')[0].trim();
+  const host = first(req.headers['x-forwarded-host']) || first(req.headers.host);
+  const proto = first(req.headers['x-forwarded-proto']).toLowerCase();
+  if (/^[a-z0-9.-]+(:\d{1,5})?$/i.test(host)) return `${proto === 'https' || proto === 'http' ? proto : (req.socket as any).encrypted ? 'https' : 'http'}://${host}`;
+  return `http://localhost:${req.socket.localPort ?? 3000}`;
+}
+
 export function startServer(opts: { port?: number; host?: string } & HubOptions = {}): Promise<RunningServer> {
   const hub = new Hub(opts);
 
@@ -43,22 +51,6 @@ export function startServer(opts: { port?: number; host?: string } & HubOptions 
     const url = new URL(req.url ?? '/', 'http://x');
     try {
       if (url.pathname === '/healthz') return void res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
-
-      // Billing plug-in points: not implemented in v1
-      if (url.pathname.startsWith('/billing/')) {
-        if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
-        const notImpl = () => json(res, 501, { error: 'not_implemented', message: 'Payments are not set up yet' });
-        try {
-          if (url.pathname === '/billing/checkout') await billing.createCheckoutSession('host');
-          else if (url.pathname === '/billing/portal') await billing.createPortalSession('host');
-          else if (url.pathname === '/billing/webhook') await billing.handleWebhook(Buffer.alloc(0), undefined);
-          else return json(res, 404, { error: 'not_found' });
-        } catch (e) {
-          if (e instanceof billing.NotImplementedError) return notImpl();
-          throw e;
-        }
-        return notImpl();
-      }
 
       // Dev-only subscription toggle (disabled unless DEV_UNLOCK=1)
       if (url.pathname === '/dev/subscription') {
@@ -89,11 +81,11 @@ export function startServer(opts: { port?: number; host?: string } & HubOptions 
   }, 30000);
   heartbeat.unref();
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     const w = ws as typeof ws & { alive?: boolean };
     w.alive = true;
     ws.on('pong', () => { w.alive = true; });
-    const conn = hub.attach(ws);
+    const conn = hub.attach(ws, originOf(req));
     if (!conn) { ws.close(1013, 'server full'); return; }
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;

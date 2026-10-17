@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "e2e": "tsx scripts/e2e.ts",
+    "e2e:prod": "tsx scripts/e2e-prod.ts",
     "screenshots": "tsx scripts/screenshots.ts"
   },
   "engines": {

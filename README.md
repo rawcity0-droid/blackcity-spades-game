@@ -4,7 +4,7 @@ Online partnership Spades in the browser: 4 players (N/S vs E/W), bots fill empt
 host-created tables with rule toggles, brackets and multi-table tournaments, live spectating, and a phone-first UI. One Node process
 serves the site and the WebSocket game server. The server is authoritative: clients only ever receive their own hand.
 
-Status: v1 plus the UI redo, local only. Payments are a stub. Nothing is deployed.
+Status: v1 plus the UI redo, Stripe billing (needs env vars; see Billing), and name rules. Nothing is deployed from here.
 
 ## Run it
 
@@ -30,6 +30,7 @@ Other scripts:
 | `npm run build` / `npm run start:prod` | Compile to `dist/` and run it with plain `node` |
 | `npm run dev` | `tsx watch` (restarts on change) |
 | `npm run e2e` | Scripted end-to-end check against a running server (see below) |
+| `npm run e2e:prod` | Production-mode check (no DEV_UNLOCK) against a local Stripe mock |
 | `npm run screenshots` | Headless Chrome screenshots into `screenshots/` (needs Chrome; set `CHROME=/path`) |
 
 Fonts are self-hosted (no CDN) and both are SIL Open Font License 1.1, from the `google/fonts` GitHub repo, subset to Latin:
@@ -38,10 +39,13 @@ headline, used at width 72% / weight 800; `public/fonts/archivo/Archivo.ttf`, so
 Each folder keeps its `OFL.txt`. If a font file is missing the CSS falls back to the system font stack.
 
 Environment variables: `PORT` (default 3000), `DEV_UNLOCK=1` (enables the dev-only subscription toggle),
-`SPADES_FAST=1` (dev/testing only: removes the human-friendly pauses).
+`SPADES_FAST=1` (dev/testing only: removes the human-friendly pauses), and the billing settings in **Billing** below
+(`STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `OWNER_EMAILS`, `PUBLIC_BASE_URL`, `STRIPE_API_BASE`).
 
 End-to-end check: `SPADES_FAST=1 DEV_UNLOCK=1 PORT=3377 npm start`, then in another shell
-`E2E_URL=ws://localhost:3377/ws npm run e2e`, then stop the server.
+`E2E_URL=ws://localhost:3377/ws npm run e2e`, then stop the server. Production-mode check against a local Stripe mock (no `DEV_UNLOCK`):
+`SPADES_FAST=1 PORT=3388 OWNER_EMAILS=owner@example.test STRIPE_SECRET_KEY=sk_test_MOCKSECRET0123456789 STRIPE_PRICE_ID=price_mock_monthly STRIPE_API_BASE=http://127.0.0.1:3389 npm start`,
+then `E2E_URL=ws://localhost:3388/ws E2E_MOCK_PORT=3389 npm run e2e:prod` (fake key, never sent anywhere real).
 
 ## Free vs paid
 
@@ -61,35 +65,72 @@ A free user who taps **Create Table / Create Tournament / Create Bracket / Host 
 the error code is `upgrade_required` with the message "Upgrade to host — $1.99/month" (price from the config, 2 decimals), and the
 client shows the same popup for it. The "Go Premium — $1.99/mo" labels are built from the server's config value too.
 
-**What is real and what is stubbed**
+**Display names.** There is no default or generated name anywhere. A new visitor sees an empty "Enter your name" field (autocomplete
+off). A name the user typed is remembered in that browser's `localStorage` only. Join Table, Watch Table, Join Tournament, Create Table,
+Create Tournament, Create Bracket and Quick play are blocked until a non-empty name (after trimming) is entered: the client shows
+"Enter your name first" and focuses the field, and the server refuses the same actions with error code `name_required` and changes
+nothing. **Practice** (vs bots) does not need a name: it uses the name if one is set, otherwise the seat is "You"
+(`createTable {isPublic: true, practice: true}` is the one exemption).
 
-- Real: the gate itself (server-side checks in `src/server/hub.ts`), the error code, the UI prompt, the subscription store
-  (`src/server/subscriptions.ts`: in memory, optionally saved to `data/subscriptions.json`, which is git-ignored; `npm start`
-  turns the file on), and stable host ids (the sha-256 of the player's reconnect token).
-- Stubbed: payments. `src/server/billing.ts` has `createCheckoutSession(hostId)`, `handleWebhook(rawBody, signature)` and
-  `createPortalSession(hostId)`, all of which throw "not implemented". `POST /billing/*` answers 501.
-- Stubbed: **Go Premium** (`goPremium`) answers a `notice` "Billing is not set up yet" and **Restore Premium** (`restorePremium {email}`)
-  answers "Restoring Premium is not available yet". With `DEV_UNLOCK=1` both just flip the subscription flag (no payment, nothing verified).
-- Dev only: with `DEV_UNLOCK=1` the menu shows **Dev: toggle Premium** the lobby shows **Dev: toggle subscription**, the WebSocket message `devToggleSubscription` works,
-  and `POST /dev/subscription` with `{"token": "<32 hex>", "active": true}` flips a flag. Without `DEV_UNLOCK` the message returns
-  `not_allowed` and the endpoint returns 404.
+## Billing
 
-## Stripe later (plan only, nothing here is built or verified against Stripe's current docs)
+Real Stripe billing over plain `fetch` (no SDK) in `src/server/billing.ts`, with **no webhook**. Everything is configured by environment
+variables, never committed and never logged:
 
-1. Create a Checkout session in **subscription mode** for the monthly price when a host presses "Start hosting"
-   (`createCheckoutSession(hostId)`; pass the host id so the result can be matched to the player).
-2. Receive Stripe's **webhook** at `POST /billing/webhook` (`handleWebhook`): verify the signature, then call
-   `store.set(hostId, true)` when a subscription becomes active and `false` when it ends or payment fails.
-   Use the raw request body for signature verification.
-3. Offer the **customer portal** (`createPortalSession`) so hosts can update the card or cancel.
-4. Persist subscriptions somewhere durable (the JSON file is a stand-in; a hosted database is better).
-5. Keep the price in `src/config.ts`; the Stripe price id would be a second setting next to it.
+| Variable | Meaning |
+| --- | --- |
+| `STRIPE_SECRET_KEY` | Stripe secret (or restricted) key. Without it, billing is off. |
+| `STRIPE_PRICE_ID` | The recurring $1.99/month price (`price_...`). Without it, billing is off. |
+| `OWNER_EMAILS` | Comma-separated owner emails that unlock Premium through Restore Premium (trimmed, lowercased). Default: none. |
+| `PUBLIC_BASE_URL` | Optional, e.g. `https://spades.example.com`. Fixes the origin used in Checkout's success/cancel URLs. Default: derived from the request (`x-forwarded-host`/`x-forwarded-proto`, then `Host`), falling back to `http://localhost:PORT`. Set it on the real site. |
+| `STRIPE_API_BASE` | Testing only: points billing at a mock server. Default `https://api.stripe.com`. |
 
-What Raw must set up: a Stripe account; a product with a monthly price ($1.99/month as configured); the secret API key and the
-webhook signing secret as environment variables on the server; a public HTTPS domain so Stripe can reach the webhook
-(and so Checkout can return to the site). Also decide cancellation policy, any free trial, and tax handling.
-Sign-in is nickname-only today, so a host's identity is their browser token; before taking money, add real accounts or at least
-an email on the Checkout session so a subscription survives a cleared browser.
+If `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID` is missing, **Go Premium** shows "Billing is not set up yet" (and `DEV_UNLOCK=1` still flips the flag).
+
+**How it works**
+
+1. **Go Premium** (`goPremium`): the server creates a Checkout Session in `subscription` mode with `STRIPE_PRICE_ID`, quantity 1,
+   `success_url=<origin>/?premium=success&session_id={CHECKOUT_SESSION_ID}`, `cancel_url=<origin>/?premium=cancel`, and the player's host id
+   (not the secret token) in `client_reference_id` and `metadata`. The client gets `checkout {url}` and redirects to Stripe.
+2. **Return** (`?premium=success&session_id=...`): the page shows "Confirming your Premium…", sends `confirmPremium {sessionId}`, and the
+   server **retrieves the session from Stripe** (with the subscription expanded). It unlocks only if the session was created by this app,
+   is `mode=subscription`, `status=complete`, `payment_status=paid`, and its subscription is `active` or `trialing` with an item on
+   `STRIPE_PRICE_ID`. The buyer email and Stripe customer id are stored with that host, and an email to customer index is kept.
+   Verification is idempotent; a verified session is bound to the first host that claims it, so another browser replaying the same id
+   gets `claimed` (use Restore by email on the other device). The client then strips `premium` and `session_id` from the URL.
+   The cancel return shows "No charge was made".
+3. **Restore Premium by email** (`restorePremium {email}`): an email in `OWNER_EMAILS` unlocks (never expires). Otherwise the server asks
+   Stripe for customers with that email (list filter and Search, plus customers seen in earlier verified checkouts) and unlocks if any has an
+   `active`/`trialing` subscription on `STRIPE_PRICE_ID`. Otherwise the answer is always the same friendly message. Every request gets exactly
+   one `restoreResult {ok, code, message}` (`ok`, `not_found`, `bad_email`, `rate_limited`, `unreachable`); the modal shows "Checking…" until it
+   arrives and stays open on failures. 5 tries per minute per connection (and a server-wide cap).
+4. **Re-checks** (no webhook, so this is how cancellations are noticed): a Stripe-backed Premium last verified more than `stripeRecheckMs`
+   (24 h, `src/config.ts`) ago is re-verified against Stripe at the next gated action (private table, bracket, tournament) and when the player
+   reconnects. Cancelled, past due, unpaid or incomplete locks it. If Stripe cannot be reached the old state is kept for `stripeGraceMs`
+   (7 days) after the last good verification, then it locks. Owner unlocks never expire. Premium is stored against the browser token in
+   `data/subscriptions.json` (git-ignored; it holds buyer emails and Stripe customer ids, so keep that file private).
+
+**Verified vs not verified.** Verified by Stripe: that a Checkout Session exists, was paid, is a subscription on our price, and that the
+subscription is active. Not verified: who is typing an email into Restore Premium. **Email-only restore is unverified: anyone who knows a
+subscriber's (or an owner's) email can unlock Premium on their own browser.** `OWNER_EMAILS` is the same stopgap for the owner. The proper
+upgrade is to email a one-time code to that address and require it. Other limits: cancellations are seen only by the periodic re-check
+(there is no webhook), Stripe Customer Search can lag up to about a minute and the list filter is case-sensitive (earlier purchases are
+also found through the local email index), and one subscription can be restored on any number of devices.
+
+**Render setup.** In the service's Environment tab add `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `OWNER_EMAILS`, and `PUBLIC_BASE_URL`
+(your https URL). Do not set `DEV_UNLOCK` in production. Create the product and the $1.99/month recurring price in the Stripe Dashboard
+and copy the price id. Use a restricted key limited to Checkout Sessions (write), Customers (read) and Subscriptions (read) if you can.
+
+**Test it safely.** First use a Stripe **test-mode** secret key (`sk_test_...`) and a test-mode price, and pay with the test card
+`4242 4242 4242 4242`. Only switch to live keys after the whole flow works (go premium, return, restore on a second browser, cancel in the
+Dashboard and wait for the re-check). The automated tests and `npm run e2e:prod` use a local mock of Stripe and never call the real API.
+
+**Owner-only stopgap** (before any Stripe setup): set `OWNER_EMAILS` and use "Restore Premium / I'm the owner".
+
+**Dev only:** with `DEV_UNLOCK=1` the menu shows **Dev: toggle Premium**, the lobby shows **Dev: toggle subscription**, the WebSocket message
+`devToggleSubscription` works, and `POST /dev/subscription` with `{"token": "<32 hex>", "active": true}` flips a flag. Without `DEV_UNLOCK`
+the message returns `not_allowed` and the endpoint returns 404. With `DEV_UNLOCK=1` and no Stripe keys, Go Premium and Restore Premium just flip
+the flag (nothing is verified, no payment).
 
 ## Spectating
 
@@ -158,16 +199,16 @@ your own screen** (your seat pill and the lobby). It is never sent to the server
 
 JSON over WebSocket at `/ws`. Client messages are `{t: "<type>", ...}`; each is validated, rate limited (burst 30, 15/s), and capped at 2 KB.
 
-- Client to server: `hello {nick, token?}` (an empty nick keeps your saved name), `setNick {nick}`, `createTable {isPublic, target, breakRule?, sandbags?}`,
+- Client to server: `hello {nick, token?}` (an empty nick keeps a returning player's name; a new player has none), `setNick {nick}`, `createTable {isPublic, target, breakRule?, sandbags?, practice?}`,
   `setRules {target?, breakRule?, sandbags?}` (host, before start), `addBots` and `swapPartners` (host, before start; swap rotates the three non-host seats), `joinTable {id}`, `joinCode {code}`, `watchTable {id}`,
   `watchCode {code}`, `quickPlay`, `startTable`, `bid {bid}`, `play {card}`, `ready`, `rematch`, `leaveTable`,
   `createTournament {size, isPublic}`, `joinTournament {id}`, `watchTournament {id}`, `startTournament`, `leaveTournament`,
-  `createEvent {tables 1-8, target?}`, `startEvent`, `leaveEvent`, `goPremium`, `restorePremium {email}`, `devToggleSubscription`, `ping`. Cards are two characters, rank + suit, such as `AS`, `TH`, `2C`.
+  `createEvent {tables 1-8, target?}`, `startEvent`, `leaveEvent`, `goPremium`, `confirmPremium {sessionId}`, `restorePremium {email}`, `devToggleSubscription`, `ping`. Cards are two characters, rank + suit, such as `AS`, `TH`, `2C`.
 - Server to client: `welcome {token, id, nick, subscribed, config}`, `lobby {tables, tournaments}`, `table {...}` (a full snapshot for you: your
-  hand and legal cards if you are seated; includes `rules {target, breakRule, sandbags}`, `hostSeat`, and `collect {plays, winner}` for the finished trick shown for `trickPauseMs`), `tournament {...}` (bracket), `event {...}` (multi-table tournament), `left`, `tournamentLeft`, `eventLeft`, `notice {kind, message}`, `nick`, `subscription`, `error {code, message}`, `pong`.
+  hand and legal cards if you are seated; includes `rules {target, breakRule, sandbags}`, `hostSeat`, and `collect {plays, winner}` for the finished trick shown for `trickPauseMs`), `tournament {...}` (bracket), `event {...}` (multi-table tournament), `left`, `tournamentLeft`, `eventLeft`, `notice {kind, message}`, `nick`, `subscription {subscribed}`, `checkout {url}`, `premiumResult {ok, code, message}`, `restoreResult {ok, code, message}`, `error {code, message}`, `pong`.
 - Error codes: `bad_message`, `rate_limited`, `not_hello`, `upgrade_required`, `not_found`, `not_allowed`, `illegal`, `full`, `busy`,
-  `too_many`, `not_seated`, `wrong_state`.
-- Nicknames are sanitized on the server (length 16, control characters and `< > & " ' \`` removed); the client renders all text with `textContent`.
+  `too_many`, `not_seated`, `wrong_state`, `name_required`.
+- Nicknames are sanitized on the server (length 16, control characters and `< > & " ' \`` removed; may end up empty, there is no default); the client renders all text with `textContent`.
 
 ## File layout
 
@@ -177,23 +218,23 @@ src/engine/cards.ts      deck, seeded RNG, shuffle
 src/engine/game.ts       rules: bidding, play validation, tricks, scoring, game end
 src/engine/bot.ts        heuristic bidder and legal-only play
 src/engine/sim.ts        instant bot-vs-bot games
-src/server/index.ts      entry point (PORT, DEV_UNLOCK)
-src/server/server.ts     HTTP + WebSocket server, billing stubs, dev endpoint
+src/server/index.ts      entry point (PORT, DEV_UNLOCK, Stripe / OWNER_EMAILS env)
+src/server/server.ts     HTTP + WebSocket server, dev endpoint
 src/server/static.ts     static files + security headers
 src/server/hub.ts        players, lobby, routing, free/paid checks
 src/server/table.ts      one table: seats, bots, timers, spectators, views
 src/server/tournament.ts brackets, seeding, simulation, advancement
 src/server/event.ts      multi-table tournament ("Create Tournament", 1-8 tables)
 src/server/protocol.ts   message validation, nickname sanitizing, rate limiter
-src/server/subscriptions.ts  subscription store (stub backing)
-src/server/billing.ts    Stripe plug-in points (not implemented)
+src/server/subscriptions.ts  subscription store (Premium records, Stripe ids, session claims)
+src/server/billing.ts    Stripe Checkout, verification, restore, re-check (plain fetch, no webhook)
 public/index.html, style.css, app.js   the single-page client
 public/fonts/            self-hosted DM Sans and Archivo (SIL OFL, each with OFL.txt)
 public/cards.js          card frame, corner indexes, pips, card back
 public/court-art.js      the 12 J/Q/K characters (swappable)
 public/svg.js            SVG helper; public/cards.html + gallery.js: card gallery page (/cards.html)
 test/*.test.ts           engine, server, tournament tests
-scripts/e2e.ts, scripts/screenshots.ts
+scripts/e2e.ts, scripts/e2e-prod.ts, scripts/screenshots.ts
 screenshots/             output of npm run screenshots
 ```
 

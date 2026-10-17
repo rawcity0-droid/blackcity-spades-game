@@ -8,7 +8,25 @@ export const SUBSCRIPTION_PRICE_USD_PER_MONTH = 1.99;
  *  watching public tables (and tournament matches) only. Spec question still open; default true. */
 export const SPECTATE_PRIVATE_TABLES = true;
 
+/** Comma-separated OWNER_EMAILS environment variable -> trimmed, lowercased, non-empty list. Empty by default (no address is built in). */
+export function parseOwnerEmails(raw: string | undefined): string[] {
+  return (raw ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+}
+
 export const CONFIG = {
+  /** Emails that can unlock Premium through "Restore Premium" while payments are stubbed. Set OWNER_EMAILS on the host. */
+  ownerEmails: parseOwnerEmails(process.env.OWNER_EMAILS),
+  restoreAttemptsPerMinute: 5,
+
+  // Stripe billing (secrets are read from the environment in billing.ts / index.ts only, never kept here)
+  stripeApiBase: process.env.STRIPE_API_BASE ?? 'https://api.stripe.com',
+  stripeTimeoutMs: 10000,
+  /** Re-verify a Stripe-backed Premium against Stripe at the next gated action once it is this old. */
+  stripeRecheckMs: 24 * 3600 * 1000,
+  /** If Stripe cannot be reached, keep Premium until this long after the last good verification (then lock). */
+  stripeGraceMs: 7 * 24 * 3600 * 1000,
+  /** Optional fixed origin for Checkout success/cancel URLs (otherwise derived from the request). */
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? '').trim().replace(/\/+$/, ''),
   spectatePrivateTables: SPECTATE_PRIVATE_TABLES,
   subscriptionPriceUsdPerMonth: SUBSCRIPTION_PRICE_USD_PER_MONTH,
 

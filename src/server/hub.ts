@@ -7,8 +7,9 @@ import type { WebSocket } from 'ws';
 import { CONFIG, formatPrice } from '../config.js';
 import { Rng, secureRng } from '../engine/cards.js';
 import { Team } from '../engine/game.js';
-import { CODE_ALPHABET, ClientMsg, ErrorCode, RateLimiter, parseClientMessage, sanitizeNick } from './protocol.js';
+import { CODE_ALPHABET, ClientMsg, EMAIL_RE, ErrorCode, RateLimiter, parseClientMessage } from './protocol.js';
 import { EventTableEntry, TableEvent } from './event.js';
+import { Billing, BillingError } from './billing.js';
 import { SubscriptionStore } from './subscriptions.js';
 import { Table, Timings, defaultTimings } from './table.js';
 import { Match, Tournament } from './tournament.js';
@@ -30,9 +31,19 @@ export interface Conn {
   player: Player | null;
   limiter: RateLimiter;
   strikes: number;
+  /** Timestamps of recent Restore Premium attempts on this connection. */
+  restoreTries: number[];
+  confirmTries: number[];
+  checkoutTries: number[];
+  /** Origin used for Stripe success/cancel URLs (from the upgrade request, or PUBLIC_BASE_URL). */
+  baseUrl: string;
 }
 
 export interface HubOptions {
+  /** Stripe billing. Default: disabled (Go Premium says billing is not set up). Tests inject one pointing at a mock. */
+  billing?: Billing;
+  /** Overrides CONFIG.ownerEmails (tests). */
+  ownerEmails?: string[];
   timings?: Partial<Timings>;
   devUnlock?: boolean;
   store?: SubscriptionStore;
@@ -45,6 +56,13 @@ export const hostIdFromToken = (token: string): string =>
 
 export const upgradeMessage = (): string => `Upgrade to host — $${formatPrice(CONFIG.subscriptionPriceUsdPerMonth)}/month`;
 
+const NAME_REQUIRED: ReadonlySet<string> = new Set([
+  'createTable', 'joinTable', 'watchTable', 'joinCode', 'watchCode', 'quickPlay',
+  'createTournament', 'joinTournament', 'watchTournament', 'createEvent',
+]);
+
+const UNREACHABLE = 'We couldn’t reach the billing service. Try again in a moment.';
+
 export class Hub {
   players = new Map<string, Player>();            // by player id
   private byToken = new Map<string, Player>();
@@ -54,6 +72,10 @@ export class Hub {
   private codes = new Map<string, { kind: 'table' | 'tournament' | 'event'; id: string }>();
   readonly store: SubscriptionStore;
   readonly devUnlock: boolean;
+  private ownerEmails: Set<string>;
+  readonly billing: Billing;
+  private recheckTried = new Map<string, number>();
+  private restoreTriesAll: number[] = [];
   private timings: Timings;
   private rng: Rng;
   private rate: { burst: number; perSecond: number };
@@ -63,6 +85,8 @@ export class Hub {
   constructor(opts: HubOptions = {}) {
     this.store = opts.store ?? new SubscriptionStore(null);
     this.devUnlock = !!opts.devUnlock;
+    this.billing = opts.billing ?? new Billing({});
+    this.ownerEmails = new Set((opts.ownerEmails ?? CONFIG.ownerEmails).map((e) => e.trim().toLowerCase()).filter(Boolean));
     this.timings = { ...defaultTimings(), ...opts.timings };
     this.rng = opts.rng ?? secureRng;
     this.rate = opts.rateLimit ?? { burst: 30, perSecond: 15 };
@@ -70,10 +94,10 @@ export class Hub {
 
   // ---------- connection plumbing ----------
 
-  attach(ws: WebSocket): Conn | null {
+  attach(ws: WebSocket, baseUrl = ''): Conn | null {
     if (this.connections >= CONFIG.limits.maxConnections) return null;
     this.connections += 1;
-    return { ws, player: null, limiter: new RateLimiter(this.rate.burst, this.rate.perSecond), strikes: 0 };
+    return { ws, player: null, limiter: new RateLimiter(this.rate.burst, this.rate.perSecond), strikes: 0, restoreTries: [], confirmTries: [], checkoutTries: [], baseUrl: CONFIG.publicBaseUrl || baseUrl };
   }
 
   onMessage(conn: Conn, raw: string): void {
@@ -91,12 +115,28 @@ export class Hub {
     const p = conn.player;
     if (!p) { this.sendWs(conn.ws, { t: 'error', code: 'not_hello', message: 'Send hello first' }); return; }
     p.lastSeen = Date.now();
-    try {
-      this.route(p, msg);
-    } catch (e) {
-      this.err(p, 'bad_message', 'Something went wrong');
-      console.error('handler error', e);
-    }
+    const run = (): void => {
+      try {
+        switch (msg.t) {
+          case 'restorePremium': this.guard(() => this.restorePremium(conn, p, msg.email), () => this.send(p.id, { t: 'restoreResult', ok: false, code: 'unreachable', message: UNREACHABLE })); return;
+          case 'confirmPremium': this.guard(() => this.confirmPremium(conn, p, msg.sessionId), () => this.send(p.id, { t: 'premiumResult', ok: false, code: 'unreachable', message: UNREACHABLE })); return;
+          case 'goPremium': this.guard(() => this.goPremium(conn, p), () => this.notice(p, 'error', 'Could not start checkout. Please try again in a moment.')); return;
+          default: this.route(p, msg);
+        }
+      } catch (e) {
+        this.err(p, 'bad_message', 'Something went wrong');
+        console.error('handler error', e);
+      }
+    };
+    // A Stripe-backed Premium that was last verified long ago is re-checked before it is used for a gated action.
+    const gated = (msg.t === 'createTable' && !msg.isPublic) || msg.t === 'createTournament' || msg.t === 'createEvent';
+    if (gated && this.isStale(p)) void this.recheck(p).then(run, run);
+    else run();
+  }
+
+  /** Run an async handler; if it throws, answer with the fallback so the client never waits forever. */
+  private guard(fn: () => Promise<void> | void, fallback: () => void): void {
+    Promise.resolve().then(fn).catch((e) => { console.error('handler error', e instanceof BillingError ? e.message : 'unexpected'); fallback(); });
   }
 
   onClose(conn: Conn): void {
@@ -143,7 +183,7 @@ export class Hub {
     const resumed = !!p;
     if (!p) {
       const token = msg.token ?? crypto.randomBytes(16).toString('hex'); // an unknown well-formed token is adopted (restart continuity)
-      p = { id: hostIdFromToken(token), token, nick: msg.nick || sanitizeNick(''), ws: null, tableId: null, watchTableId: null, tournamentId: null, eventId: null, lastSeen: Date.now() };
+      p = { id: hostIdFromToken(token), token, nick: msg.nick, ws: null, tableId: null, watchTableId: null, tournamentId: null, eventId: null, lastSeen: Date.now() };
       this.players.set(p.id, p);
       this.byToken.set(token, p);
     }
@@ -181,6 +221,7 @@ export class Hub {
     if (t) this.send(p.id, t.view(p.id)); else p.tournamentId = null;
     const ev = p.eventId ? this.events.get(p.eventId) : undefined;
     if (ev) this.send(p.id, ev.view(p.id)); else p.eventId = null;
+    if (this.isStale(p)) void this.recheck(p); // a cancelled subscription is noticed when the player comes back
   }
 
   /** Drop long-gone state lazily (called on each hello and lobby build). */
@@ -229,17 +270,21 @@ export class Hub {
   // ---------- routing ----------
 
   private route(p: Player, msg: ClientMsg): void {
+    // Anything that seats the player, lets them watch, or creates something needs a display name first.
+    // Practice (a table of bots on this device) is the one exception: a nameless player is seated as 'You'.
+    const practice = msg.t === 'createTable' && msg.practice === true && msg.isPublic;
+    if (NAME_REQUIRED.has(msg.t) && !p.nick && !practice) {
+      return this.err(p, 'name_required', 'Enter your name first');
+    }
     switch (msg.t) {
       case 'setNick': p.nick = msg.nick; return this.send(p.id, { t: 'nick', nick: p.nick });
-      case 'createTable': return this.createTable(p, msg.isPublic, msg.target, msg.breakRule, msg.sandbags);
+      case 'createTable': return this.createTable(p, msg.isPublic, msg.target, msg.breakRule, msg.sandbags, practice);
       case 'setRules': return this.tableAction(p, (t) => t.setRules(p.id, msg));
       case 'addBots': return this.tableAction(p, (t) => t.addBots(p.id));
       case 'swapPartners': return this.tableAction(p, (t) => t.swapPartners(p.id));
       case 'createEvent': return this.createEvent(p, msg.tables, msg.target ?? CONFIG.eventTarget);
       case 'startEvent': return this.startEvent(p);
       case 'leaveEvent': return this.leaveEvent(p);
-      case 'goPremium': return this.goPremium(p);
-      case 'restorePremium': return this.restorePremium(p, msg.email);
       case 'joinTable': return this.joinTable(p, this.tables.get(msg.id), true);
       case 'watchTable': return this.watchTable(p, this.tables.get(msg.id), true);
       case 'joinCode': return this.joinCode(p, msg.code);
@@ -350,7 +395,7 @@ export class Hub {
     if (p.watchTableId) { this.tables.get(p.watchTableId)?.unwatch(p.id); p.watchTableId = null; }
   }
 
-  private createTable(p: Player, isPublic: boolean, target: number, breakRule?: boolean, sandbags?: boolean): void {
+  private createTable(p: Player, isPublic: boolean, target: number, breakRule?: boolean, sandbags?: boolean, practice = false): void {
     if (!isPublic && CONFIG.hostOnly.privateTables && !this.isSubscribed(p)) {
       return this.err(p, 'upgrade_required', upgradeMessage());
     }
@@ -359,7 +404,7 @@ export class Hub {
     if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
     this.leaveCurrent(p);
     const table = this.makeTable({ isPublic, target, breakRule, sandbags, hostId: p.id });
-    table.seatHuman(0, p.id, p.nick, true);
+    table.seatHuman(0, p.id, p.nick || (practice ? 'You' : ''), true);
     p.tableId = table.id;
     table.broadcast();
     this.markLobbyDirty();
@@ -634,28 +679,134 @@ export class Hub {
     return { id: table.id, code: table.code };
   }
 
-  // ---------- subscription (stubs; real billing comes later, see billing.ts) ----------
+  // ---------- subscription / Stripe billing (see billing.ts) ----------
 
   private notice(p: Player, kind: 'info' | 'error', message: string): void {
     this.send(p.id, { t: 'notice', kind, message });
   }
 
-  /** "Go Premium": no payment provider yet. Only DEV_UNLOCK=1 flips the flag (no money moves). */
-  private goPremium(p: Player): void {
+  private allow(tries: number[], max: number, now = Date.now()): boolean {
+    while (tries.length && now - tries[0] > 60000) tries.shift();
+    if (tries.length >= max) return false;
+    tries.push(now);
+    return true;
+  }
+
+  /** True when a Stripe-backed Premium is old enough that it should be verified again. Owner/dev unlocks never expire. */
+  private isStale(p: Player): boolean {
+    const r = this.store.get(p.id);
+    return !!r && r.source === 'stripe' && this.billing.enabled && Date.now() - (r.verifiedAt ?? 0) > CONFIG.stripeRecheckMs;
+  }
+
+  /**
+   * Ask Stripe whether this player's subscription is still active. Cancelled / past due / unpaid locks Premium. If Stripe
+   * cannot be reached the previous state is kept until the grace period after the last good verification has run out.
+   */
+  private async recheck(p: Player): Promise<void> {
+    const rec = this.store.get(p.id);
+    if (!rec || rec.source !== 'stripe' || !this.billing.enabled) return;
+    const now = Date.now();
+    if (now - (this.recheckTried.get(p.id) ?? 0) < 60000) return; // at most once a minute per player
+    this.recheckTried.set(p.id, now);
+    const lock = (why: string) => {
+      this.store.set(p.id, false);
+      this.send(p.id, { t: 'subscription', subscribed: false });
+      this.notice(p, 'info', why);
+    };
+    try {
+      const active = rec.subscriptionId ? await this.billing.isSubscriptionActive(rec.subscriptionId) : false;
+      if (active) this.store.markVerified(p.id);
+      else lock('Your Premium subscription is no longer active.');
+    } catch {
+      if (now - (rec.verifiedAt ?? 0) > CONFIG.stripeRecheckMs + CONFIG.stripeGraceMs) lock('Premium could not be confirmed. Use Restore Premium once you are online.');
+    }
+  }
+
+  /**
+   * "Go Premium". With Stripe configured this creates a Checkout Session and sends the hosted-checkout URL (`checkout`).
+   * Without it: DEV_UNLOCK flips the flag in test mode, otherwise a friendly "not set up yet" notice. Exactly one reply.
+   */
+  private async goPremium(conn: Conn, p: Player): Promise<void> {
+    if (this.billing.enabled) {
+      if (this.isSubscribed(p)) return this.notice(p, 'info', 'Premium is already active on this device.');
+      if (!this.allow(conn.checkoutTries, 10)) return this.notice(p, 'error', 'Too many tries. Wait a minute and try again.');
+      try {
+        const url = await this.billing.createCheckoutSession(p.id, conn.baseUrl || `http://localhost`);
+        this.send(p.id, { t: 'checkout', url });
+      } catch {
+        this.notice(p, 'error', 'Could not start checkout. Please try again in a moment.');
+      }
+      return;
+    }
     if (!this.devUnlock) return this.notice(p, 'info', 'Billing is not set up yet. Premium checkout is coming soon.');
     this.store.set(p.id, true);
     this.send(p.id, { t: 'subscription', subscribed: true });
     this.notice(p, 'info', 'Premium switched on (test mode, no payment was taken).');
   }
 
-  /** "Restore Premium": would look up the subscription by email. Stub: not available unless DEV_UNLOCK=1. */
-  private restorePremium(p: Player, _email: string): void {
-    if (!this.devUnlock) return this.notice(p, 'info', 'Restoring Premium is not available yet. Billing is not set up.');
-    this.store.set(p.id, true);
+  /**
+   * Back from Stripe Checkout (?premium=success&session_id=...). The session is retrieved from Stripe and Premium is only
+   * unlocked for a completed, paid, subscription-mode session whose subscription is active/trialing on our price.
+   * The first host to claim a session keeps it (a replay from another browser is refused; Restore by email can re-link).
+   * Idempotent for the same host. Exactly one `premiumResult` per request.
+   */
+  private async confirmPremium(conn: Conn, p: Player, sessionId: string): Promise<void> {
+    const reply = (ok: boolean, code: string, message: string) => this.send(p.id, { t: 'premiumResult', ok, code, message });
+    if (!this.billing.enabled) return reply(false, 'billing_off', 'Billing is not set up yet.');
+    if (!this.allow(conn.confirmTries, 10) || !this.allow(this.confirmTriesAll, 60)) return reply(false, 'rate_limited', 'Too many tries. Wait a minute and try again.');
+    let out;
+    try { out = await this.billing.verifyCheckoutSession(sessionId); } catch { return reply(false, 'unreachable', UNREACHABLE); }
+    if (!out.ok) {
+      const msg: Record<string, string> = {
+        bad_session: 'We couldn’t find that checkout. If you were charged, use Restore Premium with your email.',
+        not_paid: 'That checkout isn’t paid yet. If you just paid, wait a moment and reload the page.',
+        wrong_plan: 'That purchase isn’t an active Premium subscription.',
+        inactive: 'That purchase isn’t an active Premium subscription.',
+      };
+      return reply(false, out.code, msg[out.code]);
+    }
+    if (this.store.claimSession(sessionId, p.id) !== p.id) {
+      return reply(false, 'claimed', 'That purchase is already linked to another device. Use Restore Premium with your email to use it here.');
+    }
+    this.store.setStripe(p.id, out.sub);
     this.send(p.id, { t: 'subscription', subscribed: true });
-    this.notice(p, 'info', 'Premium restored (test mode, nothing was verified).');
+    return reply(true, 'ok', 'Premium is active.');
   }
 
+  private confirmTriesAll: number[] = [];
+
+  /**
+   * "Restore Premium / I'm the owner". An email in OWNER_EMAILS unlocks Premium (no expiry). Otherwise, with Stripe set up,
+   * the email is looked up on Stripe for an active/trialing subscription on our price. The email is NOT verified (nothing
+   * proves the caller owns it). Every attempt gets exactly one `restoreResult`; a miss never says why.
+   */
+  private async restorePremium(conn: Conn, p: Player, rawEmail: string): Promise<void> {
+    const reply = (ok: boolean, code: string, message: string) => this.send(p.id, { t: 'restoreResult', ok, code, message });
+    if (!this.allow(conn.restoreTries, CONFIG.restoreAttemptsPerMinute) || !this.allow(this.restoreTriesAll, CONFIG.restoreAttemptsPerMinute * 6)) {
+      return reply(false, 'rate_limited', 'Too many tries. Wait a minute and try again.');
+    }
+    const email = rawEmail.trim().toLowerCase();
+    if (!EMAIL_RE.test(email) || email.length > 254) return reply(false, 'bad_email', 'Enter a valid email address.');
+    if (this.ownerEmails.has(email)) {
+      this.store.set(p.id, true, 'owner');
+      this.send(p.id, { t: 'subscription', subscribed: true });
+      return reply(true, 'ok', 'Premium restored. Welcome back.');
+    }
+    if (this.billing.enabled) {
+      let found = null;
+      try { found = await this.billing.findActiveByEmail(email, this.store.customersForEmail(email)); } catch { return reply(false, 'unreachable', UNREACHABLE); }
+      if (found) {
+        this.store.setStripe(p.id, found); // re-links this subscription to this device
+        this.send(p.id, { t: 'subscription', subscribed: true });
+        return reply(true, 'ok', 'Premium restored. Welcome back.');
+      }
+    } else if (this.devUnlock) {
+      this.store.set(p.id, true);
+      this.send(p.id, { t: 'subscription', subscribed: true });
+      return reply(true, 'ok', 'Premium restored (test mode, nothing was verified).');
+    }
+    return reply(false, 'not_found', 'That email doesn’t have active Premium on this server yet.');
+  }
 
   private devToggle(p: Player): void {
     if (!this.devUnlock) return this.err(p, 'not_allowed', 'Dev unlock is off');

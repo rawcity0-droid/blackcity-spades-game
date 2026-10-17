@@ -43,10 +43,27 @@ const session = mkStore(() => sessionStorage);
 const CODE_LEN_DEFAULT = 6;
 const urlCode = (params.get('code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 let urlCodeUsed = false;
+// Back from Stripe Checkout: ?premium=success&session_id=cs_... (confirmed with the server) or ?premium=cancel
+const urlPremium = params.get('premium') === 'success' || params.get('premium') === 'cancel' ? params.get('premium') : '';
+const urlSession = (params.get('session_id') || '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 300);
+let premiumReturnHandled = false;
+function stripPremiumParams() {
+  const u = new URL(location.href);
+  u.searchParams.delete('premium');
+  u.searchParams.delete('session_id');
+  history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+}
+
+// Only a name this user typed is remembered. The old v1 auto-generated 'Player####' names are discarded.
+function savedNick() {
+  const v = (store.get(KEY_NICK) || '').trim();
+  if (/^Player\d{4}$/.test(v)) { store.del(KEY_NICK); return ''; }
+  return v;
+}
 
 // ---------- state ----------
 const state = {
-  nick: store.get(KEY_NICK) || '',
+  nick: savedNick(),
   token: store.get(KEY_TOKEN) || '',
   avatar: session.get(KEY_AVATAR) || '', // profile photo: local only, never sent to the server
   config: null,
@@ -73,7 +90,7 @@ let ws = null;
 let retry = 800;
 let pingTimer = null;
 
-function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+function send(msg) { if (ws && ws.readyState === 1) { ws.send(JSON.stringify(msg)); return true; } return false; }
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -94,6 +111,7 @@ function connect() {
   ws.onclose = (e) => {
     state.connected = false;
     clearInterval(pingTimer);
+    if (restoreUi.busy) { restoreDone(); if (restoreUi.setMsg) restoreUi.setMsg('Connection lost. Try again once you are back online.'); }
     renderConn();
     if (e.code === 4000) { toast('This player is open in another tab. Reload to take over.', 8000); return; }
     setTimeout(connect, retry);
@@ -126,15 +144,25 @@ function handle(m) {
       store.set(KEY_TOKEN, m.token);
       state.config = m.config;
       state.subscribed = m.subscribed;
+      if (!state.nick && m.nick) send({ t: 'setNick', nick: '' }); // this browser has no saved name: the server must not hold one either
+      handlePremiumReturn();
       if (urlCode && !urlCodeUsed && !state.table) { urlCodeUsed = true; openCodeModal('join', urlCode); } // ?code=ABC234 opens the join box
       break;
     case 'nick': state.nick = m.nick; store.set(KEY_NICK, m.nick); return;
     case 'lobby': state.lobby = m; fillOpenTables(); return;
     case 'notice': toast(m.message, 5500); return;
+    case 'restoreResult': onRestoreResult(m); return;
+    case 'premiumResult': onPremiumResult(m); return;
+    case 'checkout': {
+      let ok = false;
+      try { const u = new URL(m.url); ok = u.protocol === 'https:' || (u.protocol === 'http:' && u.hostname === location.hostname); } catch { /* bad URL */ }
+      if (ok) location.assign(m.url); else toast('Could not open checkout. Please try again.');
+      return;
+    }
     case 'subscription': {
       state.subscribed = m.subscribed;
       homeSig = '';
-      if (modalOpen('play')) { closeModal('play'); openPlayModal(); }
+      if (modalOpen('play') && !modalOpen('restore')) { closeModal('play'); openPlayModal(); }
       break;
     }
     case 'table': {
@@ -172,7 +200,10 @@ function handle(m) {
       break;
     case 'error':
       state.pendingStart = false;
-      if (m.code === 'upgrade_required') openPremiumGate(); else toast(m.message);
+      if (restoreUi.busy) { restoreDone(); if (modalOpen('restore') && restoreUi.setMsg) { restoreUi.setMsg(m.message); return; } }
+      if (m.code === 'upgrade_required') openPremiumGate();
+      else if (m.code === 'name_required') nameRequired();
+      else toast(m.message);
       return;
     default: return;
   }
@@ -222,6 +253,9 @@ document.addEventListener('keydown', (e) => {
 function modalCard({ title, onClose, cls = '', id }) {
   const close = h('button', { class: 'xbtn', type: 'button', 'aria-label': 'Close', onclick: onClose || (() => closeModal(id)) }, iconClose());
   const body = h('div', { class: 'modal-body' });
+  // append() would print the text "null" for an empty slot; skip null/undefined/false and flatten arrays
+  const rawAppend = body.append.bind(body);
+  body.append = (...kids) => rawAppend(...kids.flat().filter((k) => k !== null && k !== undefined && k !== false));
   const el = h('div', { class: 'modal ' + cls, role: 'dialog', 'aria-modal': 'true', 'aria-label': title || 'Dialog' },
     close, title ? h('h2', { class: 'modal-title', text: title }) : null, body);
   return { el, body };
@@ -240,12 +274,29 @@ function seg(options, current, onPick) {
 }
 
 // ---------- display name and profile photo ----------
+// The only name ever shown or prefilled is one this user typed (remembered in their own browser). There is no default.
 function commitName(value) {
-  const nick = (value ?? state.nick ?? '').trim().slice(0, 16);
-  if (!nick) return;
+  const nick = (value ?? state.nick ?? '').replace(/\s+/g, ' ').trim().slice(0, 16);
   if (nick !== state.nick) send({ t: 'setNick', nick });
   state.nick = nick;
-  store.set(KEY_NICK, nick);
+  if (nick) store.set(KEY_NICK, nick); else store.del(KEY_NICK);
+}
+
+/** Joining, watching and creating all need a name. Shows the inline message and focuses the field when it is empty. */
+function requireName(input) {
+  commitName(input ? input.value : undefined);
+  if (state.nick) return true;
+  nameRequired();
+  return false;
+}
+
+function nameRequired() {
+  const input = refs.nameInput && refs.nameInput.isConnected ? refs.nameInput : null;
+  if (!input) { openPlayModal(); return nameRequired(); }
+  if (refs.nameError) refs.nameError.hidden = false;
+  input.classList.add('invalid');
+  input.setAttribute('aria-invalid', 'true');
+  input.focus();
 }
 
 /** Read an image file, crop to a centered square, downscale to 96px and keep it as a small JPEG data URL. */
@@ -282,7 +333,63 @@ function avatar(name, { me = false, cls = '' } = {}) {
 }
 
 // ---------- premium ----------
-function goPremium() { send({ t: 'goPremium' }); }
+function goPremium() {
+  if (!send({ t: 'goPremium' })) { toast('You are offline. Reconnecting… try again in a moment.'); return; }
+  toast('Opening secure checkout…', 6000);
+}
+
+// ---- return from Stripe Checkout ----
+function confirmModal() {
+  closeModal('premium-confirm');
+  const { el, body } = modalCard({ title: 'Premium', id: 'premium-confirm', cls: 'small', onClose: () => closeModal('premium-confirm') });
+  const line = h('p', { class: 'lead', text: 'Confirming your Premium…' });
+  const actions = h('div', { class: 'btn-row' });
+  body.append(line, actions);
+  openModal('premium-confirm', el, { dismiss: false });
+  return { line, actions };
+}
+
+let confirmUi = null;
+function confirmPremiumReturn() {
+  confirmUi = confirmUi || confirmModal();
+  confirmUi.line.textContent = 'Confirming your Premium…';
+  confirmUi.actions.replaceChildren();
+  if (!send({ t: 'confirmPremium', sessionId: urlSession })) { premiumFailed('You are offline. Try again in a moment.', true); return; }
+  clearTimeout(confirmUi.timer);
+  confirmUi.timer = setTimeout(() => premiumFailed('No answer from the server. Try again.', true), 15000);
+}
+
+function premiumFailed(message, retry) {
+  if (!confirmUi) confirmUi = confirmModal();
+  clearTimeout(confirmUi.timer);
+  confirmUi.line.textContent = message;
+  confirmUi.actions.replaceChildren(
+    ...(retry ? [btn('soft', 'Try again', confirmPremiumReturn)] : []),
+    btn('gold', 'OK', () => { closeModal('premium-confirm'); confirmUi = null; if (!retry) stripPremiumParams(); }));
+}
+
+function onPremiumResult(m) {
+  if (!confirmUi) return;
+  clearTimeout(confirmUi.timer);
+  if (m.ok) {
+    state.subscribed = true;
+    homeSig = '';
+    confirmUi.line.textContent = 'Premium is active. Thank you!';
+    confirmUi.actions.replaceChildren(btn('gold', 'Continue', () => { closeModal('premium-confirm'); confirmUi = null; }));
+    stripPremiumParams();
+    render();
+  } else {
+    premiumFailed(m.message || 'We could not confirm that purchase.', m.code === 'unreachable' || m.code === 'rate_limited');
+  }
+}
+
+function handlePremiumReturn() {
+  if (premiumReturnHandled || !urlPremium) return;
+  premiumReturnHandled = true;
+  if (urlPremium === 'cancel') { stripPremiumParams(); toast('No charge was made. You can go Premium any time.', 6000); return; }
+  if (!urlSession) { stripPremiumParams(); return; }
+  confirmPremiumReturn();
+}
 
 function requirePremium(fn) {
   if (!state.subscribed) { openPremiumGate(); return; }
@@ -300,23 +407,61 @@ function openPremiumGate() {
   openModal('gate', el);
 }
 
+// Restore Premium: every request gets exactly one `restoreResult` from the server. The button shows "Checking…" until
+// it arrives (or an 8 s safety timeout), success closes the modal, anything else keeps it open with a clear message.
+const restoreUi = { busy: false, timer: 0, setBusy: null, setMsg: null };
+
 function openRestore() {
-  const { el, body } = modalCard({ title: 'Restore Premium', id: 'restore', cls: 'small' });
-  const input = h('input', { type: 'email', id: 'restore-email', placeholder: 'you@example.com', autocomplete: 'email', maxlength: 254, 'aria-label': 'Email address used for Premium' });
+  const { el, body } = modalCard({ title: 'Restore Premium', id: 'restore', cls: 'small', onClose: () => { restoreDone(); closeModal('restore'); } });
+  const input = h('input', { type: 'email', id: 'restore-email', placeholder: 'you@example.com', autocomplete: 'email', maxlength: 254, 'aria-label': 'Email address used for Premium', 'aria-describedby': 'restore-msg' });
+  const msg = h('div', { class: 'field-error', id: 'restore-msg', role: 'alert' });
+  msg.hidden = true;
+  const goBtn = btn('gold', 'Restore Premium', () => go());
+  restoreUi.setMsg = (text) => { msg.textContent = text || ''; msg.hidden = !text; input.classList.toggle('invalid', !!text); };
+  restoreUi.setBusy = (on) => { goBtn.disabled = on; input.disabled = on; goBtn.textContent = on ? 'Checking…' : 'Restore Premium'; };
   const go = () => {
+    if (restoreUi.busy) return;
     const email = input.value.trim();
-    if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/.test(email)) { toast('Enter the email address you used for Premium'); input.focus(); return; }
-    send({ t: 'restorePremium', email });
-    closeModal('restore');
+    if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/.test(email)) { restoreUi.setMsg('Enter the email address you used for Premium.'); input.focus(); return; }
+    restoreUi.setMsg('');
+    restoreUi.busy = true;
+    restoreUi.setBusy(true);
+    clearTimeout(restoreUi.timer);
+    restoreUi.timer = setTimeout(() => { if (restoreUi.busy) { restoreDone(); restoreUi.setMsg('No answer from the server. Check your connection and try again.'); } }, 8000);
+    if (!send({ t: 'restorePremium', email })) { restoreDone(); restoreUi.setMsg('You are offline. Reconnecting… try again in a moment.'); }
   };
+  input.addEventListener('input', () => restoreUi.setMsg(''));
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   body.append(
     h('p', { class: 'lead', text: 'Enter the email used for your active Blackcity Premium subscription.' }),
     h('label', { class: 'field-label', for: 'restore-email', text: 'Email address used for Premium' }),
-    input,
-    h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('restore')), btn('gold', 'Restore Premium', go)));
+    input, msg,
+    h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => { restoreDone(); closeModal('restore'); }), goBtn));
   openModal('restore', el);
   setTimeout(() => input.focus(), 60);
+}
+
+function restoreDone() {
+  restoreUi.busy = false;
+  clearTimeout(restoreUi.timer);
+  if (restoreUi.setBusy) restoreUi.setBusy(false);
+}
+
+function onRestoreResult(m) {
+  restoreDone();
+  if (m.ok) {
+    state.subscribed = true;
+    homeSig = '';
+    closeModal('restore');
+    closeModal('gate');
+    if (modalOpen('play')) { closeModal('play'); openPlayModal(); } // back to Play Online with the host tiles enabled
+    toast(m.message || 'Premium restored', 4000);
+    render();
+  } else if (modalOpen('restore') && restoreUi.setMsg) {
+    restoreUi.setMsg(m.message || 'That email doesn’t have active Premium on this server yet.');
+  } else {
+    toast(m.message);
+  }
 }
 
 // ---------- home ----------
@@ -358,7 +503,7 @@ function renderHome() {
 function startPractice() {
   commitName();
   state.pendingStart = true;
-  send({ t: 'createTable', isPublic: true, target: state.practiceTarget });
+  send({ t: 'createTable', isPublic: true, target: state.practiceTarget, practice: true }); // practice never needs a name; you sit as 'You' if none is set
 }
 
 // ---------- Play Online modal ----------
@@ -367,10 +512,16 @@ const refs = {};
 function openPlayModal() {
   closeModal('menu');
   const { el, body } = modalCard({ title: 'Play Online', id: 'play', cls: 'wide' });
-  const nameInput = h('input', { type: 'text', id: 'display-name', maxlength: 16, placeholder: 'Enter your name', value: state.nick, autocomplete: 'nickname', 'aria-label': 'Your display name' });
+  // Starts empty for a new visitor; only a name this user typed before is restored. autocomplete stays off so a browser can't fill a stranger's name.
+  const nameInput = h('input', { type: 'text', id: 'display-name', maxlength: 16, placeholder: 'Enter your name', value: state.nick || '', autocomplete: 'off', autocapitalize: 'words', spellcheck: 'false', 'aria-label': 'Your display name', 'aria-describedby': 'name-error' });
+  const nameError = h('div', { class: 'field-error', id: 'name-error', role: 'alert', text: 'Enter your name first' });
+  nameError.hidden = true;
+  const clearNameError = () => { nameError.hidden = true; nameInput.classList.remove('invalid'); nameInput.removeAttribute('aria-invalid'); };
+  nameInput.addEventListener('input', () => { if (nameInput.value.trim()) clearNameError(); });
   nameInput.addEventListener('change', () => commitName(nameInput.value));
   nameInput.addEventListener('blur', () => commitName(nameInput.value));
   refs.nameInput = nameInput;
+  refs.nameError = nameError;
   const fileInput = h('input', { type: 'file', accept: 'image/*', class: 'hidden', 'aria-label': 'Choose profile photo' });
   fileInput.addEventListener('change', () => pickPhoto(fileInput.files[0], () => { closeModal('play'); openPlayModal(); }));
   const me = h('div', { class: 'avatar big' });
@@ -378,18 +529,19 @@ function openPlayModal() {
   const sub = state.subscribed
     ? 'Premium active — host tables, tournaments, and brackets, or join with a code.'
     : 'Join or watch free with a host’s code. Premium hosts create tables, tournaments, and brackets.';
-  const tile = (title, desc, fn) => h('button', { class: 'tile', type: 'button', onclick: () => { commitName(nameInput.value); fn(); } },
+  const tile = (title, desc, fn) => h('button', { class: 'tile', type: 'button', onclick: () => { if (requireName(nameInput)) fn(); } },
     h('b', { text: title }), h('span', { text: desc }));
   refs.openTables = h('div', { class: 'open-tables' });
   body.append(
     h('p', { class: 'lead', text: sub }),
     h('label', { class: 'field-label', for: 'display-name', text: 'Your display name' }),
     nameInput,
+    nameError,
     h('div', { class: 'photo-row' }, me,
       h('div', {}, btn('outline', 'Choose profile photo', () => fileInput.click()),
         h('div', { class: 'tiny', text: 'Shown at your seat for this session.' })), fileInput),
-    state.subscribed ? null : h('div', { class: 'prem-row light' },
-      h('button', { class: 'pill-gold', type: 'button', text: premiumLabel(), onclick: goPremium }), link('Restore Premium', openRestore)),
+    ...(state.subscribed ? [] : [h('div', { class: 'prem-row light' },
+      h('button', { class: 'pill-gold', type: 'button', text: premiumLabel(), onclick: goPremium }), link('Restore Premium', openRestore))]),
     h('div', { class: 'tiles' },
       tile('Join Table — Free', `Enter the ${codeLen()}-character code from the host.`, () => openCodeModal('join')),
       tile('Watch Table — Free', 'Enter a code for a no-hands spectator view, great for streaming.', () => openCodeModal('watch')),
@@ -397,7 +549,7 @@ function openPlayModal() {
       tile('Create Table', 'Premium host: make a private code and choose the rules.', () => requirePremium(createTable)),
       tile('Create Tournament', 'Premium host: run one to eight tables.', () => requirePremium(openEventModal)),
       tile('Create Bracket', 'Premium host: run a winner-advances bracket.', () => requirePremium(openBracketModal))),
-    h('div', { class: 'quick-row' }, link('Quick play at a public table', () => { commitName(nameInput.value); send({ t: 'quickPlay' }); })),
+    h('div', { class: 'quick-row' }, link('Quick play at a public table', () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); })),
     refs.openTables);
   openModal('play', el);
   fillOpenTables();
@@ -414,11 +566,12 @@ function fillOpenTables() {
         h('div', { class: 'title', text: `${t.host}’s table` }),
         h('div', { class: 'muted', text: `${t.humans}/4 people · to ${t.target} · ${t.status === 'waiting' ? 'not started' : 'in play'}` })),
       h('div', { class: 'row' },
-        btn('small gold', 'Join', () => { commitName(refs.nameInput && refs.nameInput.value); send({ t: 'joinTable', id: t.id }); }, { disabled: t.open <= 0 }),
-        btn('small soft', 'Watch', () => send({ t: 'watchTable', id: t.id }))))));
+        btn('small gold', 'Join', () => { if (requireName(refs.nameInput)) send({ t: 'joinTable', id: t.id }); }, { disabled: t.open <= 0 }),
+        btn('small soft', 'Watch', () => { if (requireName(refs.nameInput)) send({ t: 'watchTable', id: t.id }); })))));
 }
 
 function createTable() {
+  if (!requireName(refs.nameInput)) return;
   closeModal('play');
   send({ t: 'createTable', isPublic: false, target: (state.config && state.config.defaultTarget) || 500 });
 }
@@ -428,7 +581,15 @@ function openCodeModal(kind, prefill = '') {
   const { el, body } = modalCard({ title: titles[kind], id: 'code', cls: 'small' });
   const input = h('input', { class: 'code-input', id: 'code-input', type: 'text', maxlength: codeLen(), placeholder: 'CODE', value: prefill, autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'aria-label': 'Code' });
   input.addEventListener('input', () => { input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+  // Reached directly (e.g. a ?code= link) without a name yet: ask for it here.
+  const nameBox = state.nick ? null : h('input', { type: 'text', id: 'code-name', maxlength: 16, placeholder: 'Enter your name', autocomplete: 'off', 'aria-label': 'Your display name' });
+  const nameMsg = h('div', { class: 'field-error', role: 'alert', text: 'Enter your name first' });
+  nameMsg.hidden = true;
   const go = () => {
+    if (nameBox) {
+      commitName(nameBox.value);
+      if (!state.nick) { nameMsg.hidden = false; nameBox.classList.add('invalid'); nameBox.focus(); return; }
+    }
     const code = input.value.trim().toUpperCase();
     if (code.length !== codeLen()) { toast(`Codes are ${codeLen()} letters or numbers`); input.focus(); return; }
     if (kind === 'watch') state.openSheet = true; // a bracket / event code opens its view
@@ -437,6 +598,7 @@ function openCodeModal(kind, prefill = '') {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   body.append(
     h('p', { class: 'lead', text: kind === 'watch' ? 'Enter the code for a no-hands spectator view.' : kind === 'tournament' ? 'Enter the tournament code from the host.' : `Enter the ${codeLen()}-character code from the host.` }),
+    ...(nameBox ? [nameBox, nameMsg] : []),
     input,
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('code')), btn('gold', kind === 'watch' ? 'Watch' : 'Join', go)));
   openModal('code', el);
@@ -456,7 +618,7 @@ function openEventModal() {
     h('div', { class: 'field-label', text: 'Each game goes to' }),
     seg((cfg.tableTargets || [250, 500]).map((n) => [n, String(n)]), f.target, (v) => { f.target = v; }),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('event')),
-      btn('gold', 'Create', () => { commitName(); send({ t: 'createEvent', tables: f.tables, target: f.target }); })));
+      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target }); })));
   openModal('event', el);
 }
 
@@ -470,7 +632,7 @@ function openBracketModal() {
     h('div', { class: 'field-label', text: 'Teams' }),
     seg((cfg.tournamentSizes || [4, 8, 16]).map((n) => [n, String(n)]), f.size, (v) => { f.size = v; }),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('bracket')),
-      btn('gold', 'Create', () => { commitName(); send({ t: 'createTournament', size: f.size, isPublic: false }); })));
+      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: false }); })));
   openModal('bracket', el);
 }
 
@@ -739,7 +901,7 @@ function renderHandZone(t) {
   if (!t) return;
   if (t.spectator) {
     if (t.openSeats > 0 && !t.queued && !t.tournament && t.phase !== 'waiting') {
-      zone.append(h('div', { class: 'row center-row' }, btn('gold', 'Take a seat', () => { commitName(); send({ t: 'joinCode', code: t.code }); })));
+      zone.append(h('div', { class: 'row center-row' }, btn('gold', 'Take a seat', () => { if (!requireName()) return; send({ t: 'joinCode', code: t.code }); })));
     }
     return;
   }
@@ -997,7 +1159,7 @@ function eventTableCard(r) {
     const mine = r.teams.some((t) => t.mine);
     foot.append(h('span', { class: 'badge live', text: 'Live' }),
       mine ? h('span', { class: 'muted', text: 'your table' }) : btn('small soft', 'Watch', () => send({ t: 'watchTable', id: r.tableId })));
-  } else foot.append(h('span', { class: 'badge done', text: 'Final' }), r.forfeit ? h('span', { class: 'muted', text: 'forfeit' }) : null);
+  } else foot.append(h('span', { class: 'badge done', text: 'Final' }), ...(r.forfeit ? [h('span', { class: 'muted', text: 'forfeit' })] : []));
   return h('div', { class: `match ${r.status}` }, h('div', { class: 'mhead', text: `Table ${r.no}` }), teamRow(r.teams[0], 0), teamRow(r.teams[1], 1), foot);
 }
 

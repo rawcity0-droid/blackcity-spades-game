@@ -106,7 +106,7 @@ test('rules reach the engine: break rule off lets the first leader open with a s
 test('host lobby: add bots fills open seats, swap partners rotates the other seats, start works with four filled seats', async () => {
   const srv = await testServer({ devUnlock: true });
   try {
-    const host = (await connect(srv.port, 'Raw')).c;
+    const host = (await connect(srv.port, 'Hostess')).c;
     await premium(host);
     host.send({ t: 'createTable', isPublic: false, target: 500 });
     const v0 = await host.waitFor((m) => m.t === 'table');
@@ -130,7 +130,7 @@ test('host lobby: add bots fills open seats, swap partners rotates the other sea
 
     host.send({ t: 'swapPartners' });
     const swapped = await host.waitFor((m) => m.t === 'table' && m.seats[2].name !== names1[2]);
-    assert.equal(swapped.seats[0].name, 'Raw'); // the host keeps their seat
+    assert.equal(swapped.seats[0].name, 'Hostess'); // the host keeps their seat
     assert.deepEqual([...swapped.seats.map((s: any) => s.name)].sort(), [...names1].sort());
     const gv2 = await guest.waitFor((m) => m.t === 'table' && m.mySeat !== 1);
     assert.equal(gv2.mySeat, 2); // the guest moved from East (opponent) to South: now the host's partner
@@ -146,18 +146,19 @@ test('host lobby: add bots fills open seats, swap partners rotates the other sea
   } finally { await srv.close(); }
 });
 
-test('Go Premium / Restore Premium are stubs: friendly notice unless DEV_UNLOCK=1', async () => {
+test('Go Premium is a stub (notice unless DEV_UNLOCK=1); Restore Premium needs an owner email unless DEV_UNLOCK=1', async () => {
   const off = await testServer();
   try {
     const { c } = await connect(off.port, 'Free');
     c.send({ t: 'goPremium' });
     const n1 = await c.waitFor((m) => m.t === 'notice');
     assert.match(n1.message, /Billing is not set up yet/);
-    c.send({ t: 'restorePremium', email: 'owner@example.com' });
-    const n2 = await c.waitFor((m) => m.t === 'notice' && /not available yet/.test(m.message));
-    assert.equal(n2.kind, 'info');
+    c.send({ t: 'restorePremium', email: 'owner@example.com' }); // no OWNER_EMAILS configured: nobody matches
+    const n2 = await c.waitFor((m) => m.t === 'restoreResult');
+    assert.equal(n2.ok, false);
+    assert.equal(n2.code, 'not_found');
     c.send({ t: 'restorePremium', email: 'not-an-email' });
-    assert.equal((await c.waitFor((m) => m.t === 'error')).code, 'bad_message');
+    assert.equal((await c.waitFor((m) => m.t === 'restoreResult' && m.code === 'bad_email')).ok, false);
     await sleep(50);
     assert.equal(c.log.some((m) => m.t === 'subscription'), false);
     // the gate still holds
@@ -170,6 +171,7 @@ test('Go Premium / Restore Premium are stubs: friendly notice unless DEV_UNLOCK=
     const a = (await connect(on.port, 'A')).c;
     a.send({ t: 'restorePremium', email: 'owner@example.com' });
     assert.equal((await a.waitFor((m) => m.t === 'subscription')).subscribed, true);
+    assert.equal((await a.waitFor((m) => m.t === 'restoreResult', 8000, true)).ok, true);
     a.send({ t: 'createTable', isPublic: false, target: 500 });
     assert.equal((await a.waitFor((m) => m.t === 'table')).isHost, true);
     const b = (await connect(on.port, 'B')).c;
@@ -178,7 +180,7 @@ test('Go Premium / Restore Premium are stubs: friendly notice unless DEV_UNLOCK=
   } finally { await on.close(); }
 });
 
-test('display name: setNick changes the name used at the next seat; an empty hello nick keeps the old one', async () => {
+test('display name: setNick changes the name used at the next seat; an empty hello nick keeps the old one, a new player has no name', async () => {
   const srv = await testServer();
   try {
     const { c, welcome } = await connect(srv.port, 'Old');
@@ -189,10 +191,9 @@ test('display name: setNick changes the name used at the next seat; an empty hel
     const again = await connect(srv.port, '', welcome.token);
     assert.equal(again.welcome.nick, 'New bName');
     const anon = await connect(srv.port, '');
-    assert.match(anon.welcome.nick, /^Player\d{4}$/);
+    assert.equal(anon.welcome.nick, ''); // no generated default
     anon.c.send({ t: 'quickPlay' });
-    const v = await anon.c.waitFor((m) => m.t === 'table');
-    assert.equal(v.seats[0].name, anon.welcome.nick);
+    assert.equal((await anon.c.waitFor((m) => m.t === 'error')).code, 'name_required');
   } finally { await srv.close(); }
 });
 
