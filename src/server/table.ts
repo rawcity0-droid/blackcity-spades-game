@@ -54,6 +54,8 @@ const fail = (code: string, message: string) => ({ ok: false as const, code, mes
 
 const BOT_NAMES = ['Ace', 'Duke', 'Queenie', 'Jax', 'Maverick', 'Sage', 'Rook', 'Dottie', 'Blaze', 'Nova', 'Pip', 'Otis'];
 
+export interface ChatLine { from: string; role: 'player' | 'watcher'; text: string; ts: number; by: string }
+
 export class Table {
   readonly id: string;
   readonly code: string;
@@ -71,6 +73,9 @@ export class Table {
   status: TableStatus = 'waiting';
   pause: CompletedTrick | null = null;    // end of a hand: the last trick is shown and play is blocked
   collect: CompletedTrick | null = null;  // mid-hand: the completed trick stays visible but does NOT block the next lead
+  /** Last CONFIG.chat.history chat lines; cleared with the table. Chat never carries hands. */
+  chat: ChatLine[] = [];
+  private chatSent = new Set<string>();      // people who already got the history since they (re)joined
   forfeit = false;
   fastForward = false;
   teamHadHumans: [boolean, boolean] = [false, false];
@@ -169,6 +174,7 @@ export class Table {
 
   unwatch(pid: string): void {
     const had = this.watchers.delete(pid);
+    this.chatSent.delete(pid);
     this.waiters = this.waiters.filter((w) => w !== pid);
     this.waiterNames.delete(pid);
     if (had) { this.broadcast(); this.hooks.changed(); }
@@ -193,6 +199,7 @@ export class Table {
     const s = this.seats[i];
     s.connected = connected;
     if (!connected) {
+      this.chatSent.delete(pid); // resend the history when they come back
       s.disconnectedAt = Date.now();
       s.botControlled = true; // a bot plays this seat right away
     } else {
@@ -580,9 +587,34 @@ export class Table {
   broadcast(): void {
     if (this.dead) return;
     for (const s of this.seats) {
-      if (s.kind === 'human' && s.connected) this.hooks.send(s.playerId as string, this.view(s.playerId as string));
+      if (s.kind === 'human' && s.connected) { this.hooks.send(s.playerId as string, this.view(s.playerId as string)); this.sendChatHistory(s.playerId as string); }
     }
-    for (const w of this.watchers) this.hooks.send(w, this.view(w));
+    for (const w of this.watchers) { this.hooks.send(w, this.view(w)); this.sendChatHistory(w); }
+  }
+
+  // ---------- chat ----------
+
+  private sendChatHistory(pid: string): void {
+    if (this.chatSent.has(pid)) return;
+    this.chatSent.add(pid);
+    this.hooks.send(pid, { t: 'chatHistory', table: this.id, msgs: this.chat.map((l) => this.chatOut(l, pid)) });
+  }
+
+  private chatOut(l: ChatLine, to: string) {
+    return { from: l.from, role: l.role, text: l.text, ts: l.ts, mine: l.by === to };
+  }
+
+  /** Post a (pre-sanitized) message from a seated player or a watcher and send it to everyone at the table. */
+  postChat(pid: string, name: string, text: string): boolean {
+    if (this.dead || !this.hasPerson(pid)) return false;
+    const line: ChatLine = { from: name, role: this.seatOf(pid) >= 0 ? 'player' : 'watcher', text, ts: Date.now(), by: pid };
+    this.chat.push(line);
+    if (this.chat.length > CONFIG.chat.history) this.chat.splice(0, this.chat.length - CONFIG.chat.history);
+    for (const s of this.seats) {
+      if (s.kind === 'human' && s.connected) this.hooks.send(s.playerId as string, { t: 'chatMsg', table: this.id, ...this.chatOut(line, s.playerId as string) });
+    }
+    for (const w of this.watchers) this.hooks.send(w, { t: 'chatMsg', table: this.id, ...this.chatOut(line, w) });
+    return true;
   }
 
   // ---------- teardown ----------
@@ -596,6 +628,8 @@ export class Table {
 
   dispose(): void {
     this.dead = true;
+    this.chat = [];
+    this.chatSent.clear();
     for (const t of [this.timer, this.pauseTimer, this.collectTimer, this.idleTimer, this.endTimer]) if (t) clearTimeout(t);
     this.timer = this.pauseTimer = this.collectTimer = this.idleTimer = this.endTimer = null;
   }

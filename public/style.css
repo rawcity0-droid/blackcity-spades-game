@@ -106,11 +106,54 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--gold); outl
 .cbtn.idle { cursor: default; }
 @media (hover: hover) { .cbtn.legal:hover { transform: translateY(-14px); z-index: 3; } }
 
-#footbar { flex: none; display: flex; justify-content: flex-end; padding: 2px 0 8px; }
+#footbar { flex: none; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0 8px; }
 .conn { display: inline-flex; align-items: center; gap: 6px; background: rgba(10, 36, 24, .6); border-radius: 999px; padding: 4px 10px; font-size: 12px; color: #d6e6dc; }
 .conn i { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
 .conn.off i { background: #e8a24f; }
 .conn b { font-weight: 600; }
+
+/* ---------- dock: music + chat ---------- */
+#dock { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dock-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; min-width: 40px; padding: 0 10px; border: 1px solid rgba(255, 255, 255, .12); border-radius: 999px; background: rgba(10, 36, 24, .6); color: #d6e6dc; font-weight: 700; font-size: 14px; }
+.dock-btn.on, .dock-btn[aria-pressed="true"], .dock-btn[aria-expanded="true"] { background: var(--gold); color: #17140a; border-color: var(--gold); }
+.dock-btn .cbadge { position: absolute; top: -6px; right: -4px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: #e0574f; color: #fff; font-size: 12px; font-weight: 800; line-height: 20px; text-align: center; border: 2px solid var(--felt1); }
+.vol { -webkit-appearance: none; appearance: none; width: 84px; height: 40px; margin: 0; background: transparent; }
+.vol::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .25); }
+.vol::-moz-range-track { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .25); }
+.vol::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; margin-top: -8px; border-radius: 50%; background: var(--gold); border: 0; }
+.vol::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: var(--gold); border: 0; }
+
+/* ---------- chat sheet (bottom sheet on phones; the stage makes room so it never covers the hand) ---------- */
+#app { --chat-h: 200px; }
+@media (min-width: 620px) { #app { --chat-h: 260px; } }
+.chat-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 15; height: var(--chat-h); max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; background: var(--ink); color: #fff; border: 1px solid rgba(232, 199, 100, .35); border-bottom: 0; border-top: 3px solid var(--gold); border-radius: 18px 18px 0 0; box-shadow: 0 -10px 30px rgba(0, 0, 0, .4); padding-bottom: env(safe-area-inset-bottom); }
+#app.chat-open #stage { padding-bottom: var(--chat-h); }
+#app.chat-open #footbar { display: none; } /* the sheet sits over it anyway; its room goes to the hand */
+@media (max-width: 619px) { #app.chat-open #board { min-height: 214px; } }
+@media (max-width: 619px) and (max-height: 780px) { #app { --chat-h: 150px; } #app.chat-open #board { min-height: 170px; } .chat-form { padding-bottom: 8px; } .chat-form input, .chat-form .btn { height: 40px; min-height: 40px; } }
+#app.chat-open .toast { bottom: calc(var(--chat-h) + 10px); }
+.chat-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 0 14px; }
+.chat-head h2 { margin: 0; font: 800 15px/1 var(--head); letter-spacing: .02em; }
+.chat-x { width: 44px; height: 40px; border: 0; background: transparent; color: #fff; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; }
+.chat-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 6px; overscroll-behavior: contain; }
+.chat-empty { margin: auto; color: #9fb3a6; font-size: 14px; }
+.cmsg { max-width: 82%; align-self: flex-start; background: #232a25; border-radius: 4px 14px 14px 14px; padding: 5px 10px 6px; font-size: 14px; line-height: 1.3; overflow-wrap: anywhere; }
+.cmsg.mine { align-self: flex-end; background: var(--gold); color: #17140a; border-radius: 14px 4px 14px 14px; }
+.cmsg.watcher { background: #1c2a3a; border: 1px dashed rgba(143, 190, 255, .55); }
+.cmsg.watcher.mine { background: #cfe0f6; color: #0f1b2b; border-color: #6c93c7; }
+.cmeta { display: flex; align-items: center; gap: 6px; font-size: 11px; opacity: .8; margin-bottom: 1px; }
+.cmeta b { font-weight: 800; }
+.cmeta .tag { font-weight: 800; text-transform: uppercase; letter-spacing: .05em; font-size: 9.5px; border: 1px solid currentColor; border-radius: 6px; padding: 0 4px; }
+.chat-form { flex: none; display: flex; gap: 8px; padding: 6px 10px 10px; }
+.chat-form input { flex: 1 1 auto; min-width: 0; height: 44px; border-radius: 12px; border: 1.5px solid #3a443d; background: #fff; color: var(--dark); padding: 0 12px; font-size: 16px; }
+.chat-form .btn { min-height: 44px; padding: 0 18px; font-size: 16px; }
+
+@media (min-width: 900px) { /* wide screens: a drawer on the right, the table shrinks to make room */
+  #app.chat-open #stage { padding-bottom: 0; margin: 0; max-width: calc(100% - 340px); }
+  #app.chat-open #footbar { display: flex; }
+  #app.chat-open .toast { bottom: 14px; }
+  .chat-sheet { left: auto; right: 0; top: 0; bottom: 0; width: 340px; height: auto; margin: 0; border: 0; border-left: 1px solid rgba(232, 199, 100, .35); border-top: 3px solid var(--gold); border-radius: 0; }
+}
 
 /* ---------- layers ---------- */
 .layer-home { position: absolute; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; padding: 12px; overflow-y: auto; pointer-events: none; }

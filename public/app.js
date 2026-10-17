@@ -5,6 +5,8 @@
 
 import { cardName, renderBack, renderCard } from './cards.js';
 import { s as svg } from './svg.js';
+import { createMusic } from './music.js';
+import { parseMusicPrefs, serializeMusicPrefs } from './music-state.js';
 
 // ---------- helpers ----------
 const $ = (id) => document.getElementById(id);
@@ -32,6 +34,7 @@ const KEY_TOKEN = 'spades_token' + sfx;
 const KEY_NICK = 'spades_nick' + sfx;
 const KEY_PRACTICE = 'spades_practice' + sfx;
 const KEY_AVATAR = 'spades_avatar' + sfx;
+const KEY_MUSIC = 'spades_music' + sfx; // {on, vol}: table music on/off and volume
 const mkStore = (area) => ({
   get: (k) => { try { return area().getItem(k); } catch { return null; } },
   set: (k, v) => { try { area().setItem(k, v); } catch { /* private mode */ } },
@@ -167,13 +170,20 @@ function handle(m) {
     case 'table': {
       const isNew = !state.table || state.table.id !== m.id;
       state.table = m;
-      if (isNew) closeAllModals();
+      if (isNew) { closeAllModals(); chatReset(); }
       if (isNew || (state.ui !== 'tournament' && state.ui !== 'event')) state.ui = 'table'; // a bracket / event view stays put otherwise
       if (state.pendingStart && m.phase === 'waiting' && m.isHost) { state.pendingStart = false; send({ t: 'startTable' }); }
       break;
     }
+    case 'chatHistory':
+      if (state.table && m.table === state.table.id) chatSet(m.msgs);
+      return;
+    case 'chatMsg':
+      if (state.table && m.table === state.table.id) chatAdd(m);
+      return;
     case 'left':
       state.table = null;
+      chatReset();
       state.ui = state.event ? 'event' : state.tour ? 'tournament' : 'home';
       if (m.reason) toast(m.reason);
       break;
@@ -201,7 +211,7 @@ function handle(m) {
       state.pendingStart = false;
       if (restoreUi.busy) { restoreDone(); if (modalOpen('restore') && restoreUi.setMsg) { restoreUi.setMsg(m.message); return; } }
       if (m.code === 'upgrade_required') openPremiumGate();
-      else if (m.code === 'name_required') nameRequired();
+      else if (m.code === 'name_required' && state.ui !== 'table') nameRequired();
       else toast(m.message);
       return;
     default: return;
@@ -244,8 +254,9 @@ function closeModal(id) {
 }
 function closeAllModals() { for (const id of [...modals.keys()]) closeModal(id); }
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || modals.size === 0) return;
-  closeModal([...modals.keys()].pop());
+  if (e.key !== 'Escape') return;
+  if (modals.size) closeModal([...modals.keys()].pop());
+  else if (chat.open) closeChat();
 });
 
 /** A light modal card: gold top edge, title, round close button. Returns {el, body}. */
@@ -704,6 +715,7 @@ function render() {
   renderStatus(t);
   renderHandZone(t);
   renderAuto(t);
+  renderDock(t);
   if (ui === 'home') renderHome();
   else if (ui === 'tournament') renderBracketSheet();
   else if (ui === 'event') renderEventSheet();
@@ -1159,6 +1171,123 @@ function eventTableCard(r) {
       mine ? h('span', { class: 'muted', text: 'your table' }) : btn('small soft', 'Watch', () => send({ t: 'watchTable', id: r.tableId })));
   } else foot.append(h('span', { class: 'badge done', text: 'Final' }), ...(r.forfeit ? [h('span', { class: 'muted', text: 'forfeit' })] : []));
   return h('div', { class: `match ${r.status}` }, h('div', { class: 'mhead', text: `Table ${r.no}` }), teamRow(r.teams[0], 0), teamRow(r.teams[1], 1), foot);
+}
+
+// ---------- dock: table music ----------
+// Procedural Web Audio (music.js), nothing downloaded. Off by default; it starts only from a tap. A saved "on" is
+// remembered, but browsers block sound until the page gets a tap, so it begins with the first tap anywhere.
+const music = createMusic();
+const musicPrefs = parseMusicPrefs(store.get(KEY_MUSIC));
+const saveMusic = () => store.set(KEY_MUSIC, serializeMusicPrefs(musicPrefs));
+const iconSpeaker = (on) => icon(on ? ['M4 9v6h4l5 4V5L8 9H4z', 'M16.5 8.5a5 5 0 010 7', 'M19 6a8.5 8.5 0 010 12'] : ['M4 9v6h4l5 4V5L8 9H4z', 'M17 9.5l4 5', 'M21 9.5l-4 5'], 20);
+
+async function startMusic() {
+  const ok = await music.start(musicPrefs.vol);
+  if (!ok) toast('Music could not start on this device');
+  renderMusic();
+}
+function toggleMusic() {
+  if (musicPrefs.on && !music.playing) { startMusic(); return; } // saved "on", waiting for its first tap
+  musicPrefs.on = !musicPrefs.on;
+  saveMusic();
+  if (musicPrefs.on) startMusic(); else { music.stop(); renderMusic(); }
+}
+function renderMusic() {
+  const btn = $('music-btn');
+  const vol = $('music-vol');
+  if (!music.supported) { btn.classList.add('hidden'); vol.classList.add('hidden'); return; }
+  btn.classList.remove('hidden');
+  btn.setAttribute('aria-pressed', String(musicPrefs.on));
+  btn.setAttribute('aria-label', musicPrefs.on ? 'Turn table music off' : 'Turn table music on');
+  btn.title = btn.getAttribute('aria-label');
+  btn.replaceChildren(iconSpeaker(musicPrefs.on));
+  vol.classList.toggle('hidden', !musicPrefs.on);
+  vol.value = String(Math.round(musicPrefs.vol * 100));
+}
+$('music-btn').addEventListener('click', toggleMusic);
+$('music-vol').addEventListener('input', (e) => {
+  musicPrefs.vol = parseMusicPrefs(JSON.stringify({ on: true, vol: Number(e.target.value) / 100 })).vol;
+  music.setVolume(musicPrefs.vol);
+  saveMusic();
+});
+document.addEventListener('click', (e) => { // the first tap after a reload resumes a saved "on"
+  if (musicPrefs.on && !music.playing && music.supported && !e.target.closest('#music-btn')) startMusic();
+}, true);
+
+// ---------- dock: table chat ----------
+// The server is authoritative (name, length, rate limit, history). Text is only ever shown with textContent.
+const CHAT_MAX = 200;
+const chat = { open: false, msgs: [], unread: 0 };
+const chatRefs = {};
+const iconChat = () => icon(['M4 5h16v11H9l-5 4V5z'], 20);
+
+function chatReset() { chat.msgs = []; chat.unread = 0; if (chat.open && !state.table) closeChat(); renderChatList(); renderChatButton(); }
+function chatSet(msgs) { chat.msgs = Array.isArray(msgs) ? msgs.slice(-50) : []; chat.unread = 0; renderChatList(); renderChatButton(); }
+function chatAdd(m) {
+  chat.msgs.push(m);
+  if (chat.msgs.length > 50) chat.msgs.shift();
+  if (!chat.open && !m.mine) chat.unread += 1;
+  renderChatList();
+  renderChatButton();
+}
+function openChat() {
+  if (!state.table) return;
+  chat.open = true;
+  chat.unread = 0;
+  buildChat();
+  $('chat-sheet').classList.remove('hidden');
+  $('app').classList.add('chat-open');
+  renderChatList();
+  renderChatButton();
+}
+function closeChat() {
+  chat.open = false;
+  $('chat-sheet').classList.add('hidden');
+  $('app').classList.remove('chat-open');
+  renderChatButton();
+}
+function buildChat() {
+  const sheet = $('chat-sheet');
+  if (chatRefs.built) return;
+  chatRefs.built = true;
+  chatRefs.list = h('div', { class: 'chat-list', role: 'log', 'aria-live': 'polite' });
+  chatRefs.input = h('input', { type: 'text', maxlength: String(CHAT_MAX), placeholder: 'Message the table', 'aria-label': 'Message', autocomplete: 'off', enterkeyhint: 'send' });
+  const form = h('form', { class: 'chat-form' }, chatRefs.input, h('button', { class: 'btn gold', type: 'submit', text: 'Send' }));
+  form.addEventListener('submit', (e) => { e.preventDefault(); sendChat(); });
+  sheet.replaceChildren(
+    h('div', { class: 'chat-head' }, h('h2', { text: 'Table chat' }), h('button', { class: 'chat-x', type: 'button', 'aria-label': 'Close chat', onclick: closeChat }, iconClose())),
+    chatRefs.list, form);
+}
+function sendChat() {
+  const text = chatRefs.input.value.replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  if (!state.nick) { toast('Enter your name on the home screen to chat'); return; }
+  if (send({ t: 'chat', text })) chatRefs.input.value = '';
+  else toast('Not connected yet');
+  chatRefs.input.focus();
+}
+const chatTime = (ts) => { try { return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } };
+function renderChatList() {
+  if (!chatRefs.list) return;
+  const list = chatRefs.list;
+  const stick = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  list.replaceChildren(...(chat.msgs.length ? chat.msgs.map((m) => h('div', { class: `cmsg${m.mine ? ' mine' : ''}${m.role === 'watcher' ? ' watcher' : ''}` },
+    h('div', { class: 'cmeta' }, h('b', { text: m.mine ? 'You' : m.from }), m.role === 'watcher' ? h('span', { class: 'tag', text: 'watcher' }) : null, h('span', { text: chatTime(m.ts) })),
+    h('div', { class: 'ctext', text: m.text }))) : [h('div', { class: 'chat-empty', text: 'No messages yet. Say hello.' })]));
+  if (stick || chat.msgs.length === 1) list.scrollTop = list.scrollHeight;
+}
+function renderChatButton() {
+  const b = $('chat-btn');
+  b.replaceChildren(...[iconChat(), h('span', { text: 'Chat' }), chat.unread ? h('span', { class: 'cbadge', text: chat.unread > 9 ? '9+' : String(chat.unread) }) : null].filter(Boolean));
+  b.setAttribute('aria-expanded', String(chat.open));
+  b.setAttribute('aria-label', chat.unread ? `Table chat, ${chat.unread} unread` : 'Table chat');
+}
+$('chat-btn').addEventListener('click', () => (chat.open ? closeChat() : openChat()));
+function renderDock(t) {
+  renderMusic();
+  const show = !!t; // chat belongs to the table you are seated at or watching
+  $('chat-btn').classList.toggle('hidden', !show);
+  if (!show && chat.open) closeChat();
 }
 
 // ---------- boot ----------

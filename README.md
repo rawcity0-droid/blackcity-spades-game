@@ -4,7 +4,7 @@ Online partnership Spades in the browser: 4 players (N/S vs E/W), bots fill empt
 host-created tables with rule toggles, brackets and multi-table tournaments, live spectating, and a phone-first UI. One Node process
 serves the site and the WebSocket game server. The server is authoritative: clients only ever receive their own hand.
 
-Status: v1 plus the UI redo, Stripe billing (needs env vars; see Billing), and name rules. Nothing is deployed from here.
+Status: v1 plus the UI redo, Stripe billing (needs env vars; see Billing), name rules, table chat and table music. Nothing is deployed from here.
 
 ## Run it
 
@@ -147,6 +147,33 @@ Config flag **`SPECTATE_PRIVATE_TABLES`** (in `src/config.ts`, default `true`): 
 public or private. When false, private tables cannot be watched. The product spec left this open, so it is a one-line change.
 (Watching from the lobby list by table id is only offered for public tables and tournament matches.)
 
+## Table chat
+
+Every table (including bracket and tournament tables) has a live chat that seated players **and spectators** can read and post to.
+Spectators still never receive hands; chat carries only names and text. The server is authoritative:
+
+- Client `{t: "chat", text}`; the server broadcasts `{t: "chatMsg", table, from, role: "player" | "watcher", text, ts, mine}` to everyone at that table.
+- **A display name is required** to post (`name_required`); you must be seated at or watching a table (`not_seated`).
+- Text is trimmed, whitespace (including newlines) collapsed, control and zero-width characters removed, and cut to **200 characters**. An empty message is rejected.
+  The client shows it with `textContent` only, so markup is just text. There is no profanity filter.
+- **Rate limit: 5 messages per 10 seconds per connection.** Over that you get a friendly "Slow down" notice and the message is dropped.
+- The **last 50 messages** per table are kept in memory and sent (`chatHistory {table, msgs}`) to anyone who joins, watches or reconnects.
+  Nothing is written to disk: history is cleared when the table is destroyed and lost on a server restart. Limits live in `CONFIG.chat` (`src/config.ts`).
+- UI: a **Chat** button (with an unread badge) in the bar under the hand opens a bottom sheet on phones and a right-hand drawer on wide screens.
+  Watcher messages carry a "watcher" tag and a blue dashed style; your own messages are gold and right-aligned. Enter sends. The table makes
+  room for the sheet instead of sitting under it, so the hand and the bid buttons stay visible (checked at 390x844 and 360x740); the X or Escape closes it.
+
+## Table music
+
+An optional soft lounge / jazz-ish background loop (slow chords, warm pad, electric-piano pulses, a gentle bass, brush-like noise).
+It is **generated in the browser with the Web Audio API: there are no audio files and nothing is downloaded** (`public/music.js`; the chord chart and
+saved settings are in `public/music-state.js`).
+
+- A speaker button in the bar under the hand turns it on or off; when on, a volume slider appears. **Default is off**, and it starts only when you tap.
+- On/off and volume are remembered in `localStorage` under `spades_music` (with the usual `_slot` suffix for `?slot=`). Browsers block sound until the page gets a tap,
+  so a saved "on" begins at your first tap after a reload.
+- Fades in and out (about 1.5 s), then ends every note and suspends the audio context, so nothing keeps running. It pauses while the tab is hidden and resumes when you are back.
+
 ## Rules implemented
 
 - 52 cards, spades are trump, seats 0=N 1=E 2=S 3=W clockwise, partners 0&2 and 1&3. Dealer rotates; the player left of the dealer bids and leads first.
@@ -203,9 +230,9 @@ JSON over WebSocket at `/ws`. Client messages are `{t: "<type>", ...}`; each is 
   `setRules {target?, breakRule?, sandbags?}` (host, before start), `addBots` and `swapPartners` (host, before start; swap rotates the three non-host seats), `joinTable {id}`, `joinCode {code}`, `watchTable {id}`,
   `watchCode {code}`, `quickPlay`, `startTable`, `bid {bid}`, `play {card}`, `ready`, `rematch`, `leaveTable`,
   `createTournament {size, isPublic}`, `joinTournament {id}`, `watchTournament {id}`, `startTournament`, `leaveTournament`,
-  `createEvent {tables 1-8, target?}`, `startEvent`, `leaveEvent`, `goPremium`, `confirmPremium {sessionId}`, `restorePremium {email}`, `devToggleSubscription`, `ping`. Cards are two characters, rank + suit, such as `AS`, `TH`, `2C`.
+  `createEvent {tables 1-8, target?}`, `startEvent`, `leaveEvent`, `chat {text}`, `goPremium`, `confirmPremium {sessionId}`, `restorePremium {email}`, `devToggleSubscription`, `ping`. Cards are two characters, rank + suit, such as `AS`, `TH`, `2C`.
 - Server to client: `welcome {token, id, nick, subscribed, config}`, `lobby {tables, tournaments}`, `table {...}` (a full snapshot for you: your
-  hand and legal cards if you are seated; includes `rules {target, breakRule, sandbags}`, `hostSeat`, and `collect {plays, winner}` for the finished trick shown for `trickPauseMs`), `tournament {...}` (bracket), `event {...}` (multi-table tournament), `left`, `tournamentLeft`, `eventLeft`, `notice {kind, message}`, `nick`, `subscription {subscribed}`, `checkout {url}`, `premiumResult {ok, code, message}`, `restoreResult {ok, code, message}`, `error {code, message}`, `pong`.
+  hand and legal cards if you are seated; includes `rules {target, breakRule, sandbags}`, `hostSeat`, and `collect {plays, winner}` for the finished trick shown for `trickPauseMs`), `tournament {...}` (bracket), `event {...}` (multi-table tournament), `chatMsg {table, from, role, text, ts, mine}`, `chatHistory {table, msgs}`, `left`, `tournamentLeft`, `eventLeft`, `notice {kind, message}`, `nick`, `subscription {subscribed}`, `checkout {url}`, `premiumResult {ok, code, message}`, `restoreResult {ok, code, message}`, `error {code, message}`, `pong`.
 - Error codes: `bad_message`, `rate_limited`, `not_hello`, `upgrade_required`, `not_found`, `not_allowed`, `illegal`, `full`, `busy`,
   `too_many`, `not_seated`, `wrong_state`, `name_required`.
 - Nicknames are sanitized on the server (length 16, control characters and `< > & " ' \`` removed; may end up empty, there is no default); the client renders all text with `textContent`.
@@ -232,8 +259,9 @@ public/index.html, style.css, app.js   the single-page client
 public/fonts/            self-hosted DM Sans and Archivo (SIL OFL, each with OFL.txt)
 public/cards.js          card frame, corner indexes, pips, card back
 public/court-art.js      the 12 J/Q/K characters (swappable)
+public/music.js, music-state.js  table music (Web Audio, no files) and its saved settings / chord chart
 public/svg.js            SVG helper; public/cards.html + gallery.js: card gallery page (/cards.html)
-test/*.test.ts           engine, server, tournament tests
+test/*.test.ts           engine, server, tournament, billing, chat and music-settings tests
 scripts/e2e.ts, scripts/e2e-prod.ts, scripts/screenshots.ts
 screenshots/             output of npm run screenshots
 ```

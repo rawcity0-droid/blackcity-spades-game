@@ -52,6 +52,13 @@ export const CONFIG = {
   hostOnly: { privateTables: true, hostTournaments: true },
 
   // Server limits and timings (milliseconds)
+  /** Table chat: players and watchers share one chat per table (also tournament tables). */
+  chat: {
+    maxChars: 200,
+    history: 50,        // last N messages kept per table and sent to anyone who joins or watches
+    burst: 5,           // messages allowed per connection ...
+    windowMs: 10000,    // ... in this many ms
+  },
   limits: {
     maxPayloadBytes: 2048,
     maxNickLength: 16,

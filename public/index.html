@@ -18,8 +18,16 @@
     <div id="board"></div>
     <div id="status"></div>
     <div id="handzone"></div>
-    <div id="footbar"><span id="conn" class="conn"><i></i><b>Connecting…</b></span></div>
+    <div id="footbar">
+      <div id="dock">
+        <button id="music-btn" class="dock-btn hidden" type="button" aria-pressed="false" aria-label="Table music" title="Table music"></button>
+        <input id="music-vol" class="vol hidden" type="range" min="0" max="100" step="5" aria-label="Music volume">
+        <button id="chat-btn" class="dock-btn chat hidden" type="button" aria-expanded="false" aria-controls="chat-sheet" aria-label="Table chat"></button>
+      </div>
+      <span id="conn" class="conn"><i></i><b>Connecting…</b></span>
+    </div>
   </div>
+  <section id="chat-sheet" class="chat-sheet hidden" role="dialog" aria-label="Table chat"></section>
   <div id="home-layer" class="layer-home hidden"></div>
   <div id="sheet-layer" class="sheet-layer hidden"></div>
   <div id="auto-layer"></div>

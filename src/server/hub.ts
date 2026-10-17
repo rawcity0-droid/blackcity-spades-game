@@ -35,6 +35,7 @@ export interface Conn {
   restoreTries: number[];
   confirmTries: number[];
   checkoutTries: number[];
+  chatTries: number[];
   /** Origin used for Stripe success/cancel URLs (from the upgrade request, or PUBLIC_BASE_URL). */
   baseUrl: string;
 }
@@ -97,7 +98,7 @@ export class Hub {
   attach(ws: WebSocket, baseUrl = ''): Conn | null {
     if (this.connections >= CONFIG.limits.maxConnections) return null;
     this.connections += 1;
-    return { ws, player: null, limiter: new RateLimiter(this.rate.burst, this.rate.perSecond), strikes: 0, restoreTries: [], confirmTries: [], checkoutTries: [], baseUrl: CONFIG.publicBaseUrl || baseUrl };
+    return { ws, player: null, limiter: new RateLimiter(this.rate.burst, this.rate.perSecond), strikes: 0, restoreTries: [], confirmTries: [], checkoutTries: [], chatTries: [], baseUrl: CONFIG.publicBaseUrl || baseUrl };
   }
 
   onMessage(conn: Conn, raw: string): void {
@@ -120,6 +121,7 @@ export class Hub {
         switch (msg.t) {
           case 'restorePremium': this.guard(() => this.restorePremium(conn, p, msg.email), () => this.send(p.id, { t: 'restoreResult', ok: false, code: 'unreachable', message: UNREACHABLE })); return;
           case 'confirmPremium': this.guard(() => this.confirmPremium(conn, p, msg.sessionId), () => this.send(p.id, { t: 'premiumResult', ok: false, code: 'unreachable', message: UNREACHABLE })); return;
+          case 'chat': this.chat(conn, p, msg.text); return;
           case 'goPremium': this.guard(() => this.goPremium(conn, p), () => this.notice(p, 'error', 'Could not start checkout. Please try again in a moment.')); return;
           default: this.route(p, msg);
         }
@@ -679,14 +681,27 @@ export class Hub {
     return { id: table.id, code: table.code };
   }
 
+  // ---------- chat ----------
+
+  /** Table chat: needs a name, a table to be at (seated or watching) and stays under the per-connection rate limit. */
+  private chat(conn: Conn, p: Player, text: string): void {
+    if (!p.nick) return this.err(p, 'name_required', 'Enter your name first');
+    const t = (p.tableId && this.tables.get(p.tableId)) || (p.watchTableId && this.tables.get(p.watchTableId)) || null;
+    if (!t || !t.hasPerson(p.id)) return this.err(p, 'not_seated', 'Join or watch a table to chat');
+    if (!this.allow(conn.chatTries, CONFIG.chat.burst, CONFIG.chat.windowMs)) {
+      return this.notice(p, 'info', `Slow down: ${CONFIG.chat.burst} messages every ${CONFIG.chat.windowMs / 1000} seconds.`);
+    }
+    t.postChat(p.id, p.nick, text);
+  }
+
   // ---------- subscription / Stripe billing (see billing.ts) ----------
 
   private notice(p: Player, kind: 'info' | 'error', message: string): void {
     this.send(p.id, { t: 'notice', kind, message });
   }
 
-  private allow(tries: number[], max: number, now = Date.now()): boolean {
-    while (tries.length && now - tries[0] > 60000) tries.shift();
+  private allow(tries: number[], max: number, windowMs = 60000, now = Date.now()): boolean {
+    while (tries.length && now - tries[0] > windowMs) tries.shift();
     if (tries.length >= max) return false;
     tries.push(now);
     return true;

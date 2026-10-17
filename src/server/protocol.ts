@@ -34,6 +34,7 @@ export type ClientMsg =
   | { t: 'goPremium' }
   | { t: 'restorePremium'; email: string }
   | { t: 'confirmPremium'; sessionId: string }
+  | { t: 'chat'; text: string }
   | { t: 'devToggleSubscription' };
 
 export type ErrorCode =
@@ -54,6 +55,13 @@ export function sanitizeNick(raw: unknown): string {
   s = s.normalize('NFKC').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff<>&"'`\\]/g, '');
   s = s.replace(/\s+/g, ' ').trim().slice(0, CONFIG.limits.maxNickLength).trim();
   return s;
+}
+
+/** Chat text: control / invisible-direction characters become spaces, whitespace collapses, trimmed, capped. May return ''. */
+export function sanitizeChat(raw: unknown): string {
+  let s = typeof raw === 'string' ? raw : '';
+  s = s.normalize('NFKC').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]/g, ' ');
+  return Array.from(s.replace(/\s+/g, ' ').trim()).slice(0, CONFIG.chat.maxChars).join('').trim();
 }
 
 const str = (v: unknown): v is string => typeof v === 'string';
@@ -95,6 +103,12 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (!(CONFIG.eventTableOptions as readonly number[]).includes(o.tables as number)) return bad('Choose 1 to 8 tables');
       if (o.target !== undefined && !(CONFIG.tableTargets as readonly number[]).includes(o.target as number)) return bad('Bad target score');
       return { msg: { t: 'createEvent', tables: o.tables as number, target: o.target as number | undefined } };
+    case 'chat': {
+      if (!str(o.text)) return bad('Message must be text');
+      const text = sanitizeChat(o.text);
+      if (!text) return bad('Type a message first');
+      return { msg: { t: 'chat', text } };
+    }
     case 'confirmPremium': // validated by the hub, which answers every attempt with exactly one premiumResult
       return { msg: { t: 'confirmPremium', sessionId: str(o.sessionId) ? o.sessionId.trim().slice(0, 300) : '' } };
     case 'restorePremium': {

@@ -30,6 +30,23 @@ async function playLegal(page: Page) {
   await page.evaluate(() => (document.querySelector('.cbtn.legal') as HTMLElement | null)?.click());
 }
 
+/** With the chat sheet open, no card (and no bid button) may sit under it. Returns the geometry for the log. */
+async function chatFits(page: Page, label: string) {
+  await page.evaluate(() => (document.getElementById('chat-btn') as HTMLElement).click());
+  await page.waitForFunction(() => !document.getElementById('chat-sheet')!.classList.contains('hidden'));
+  await sleep(250);
+  const g = await page.evaluate(() => {
+    const sh = document.getElementById('chat-sheet')!.getBoundingClientRect();
+    const hit = [...document.querySelectorAll('.hand .cbtn, .bidbtn')].filter((c) => {
+      const r = c.getBoundingClientRect();
+      return r.width > 0 && r.right > sh.left + 0.5 && r.left < sh.right - 0.5 && r.bottom > sh.top + 0.5 && r.top < sh.bottom - 0.5;
+    }).length;
+    return { top: sh.top, left: sh.left, covered: hit };
+  });
+  console.log(label, 'chat sheet at', g.left, g.top, 'covered controls:', g.covered);
+  if (g.covered) throw new Error(`${label}: chat sheet covers play: ${JSON.stringify(g)}`);
+}
+
 type Size = { tag: string; width: number; height: number; mobile: boolean };
 const SIZES: Size[] = [
   { tag: 'ph390', width: 390, height: 844, mobile: true },
@@ -94,6 +111,9 @@ async function main() {
       const st = await state(page);
       if (st.cards !== 13) throw new Error(`${sz.tag}: expected 13 cards, saw ${st.cards}`);
       await shot(page, `ui-${sz.tag}-02-bidding-13cards.png`);
+      await chatFits(page, sz.tag + ' bidding');
+      await shot(page, `ui-${sz.tag}-chat-open-bidding.png`);
+      await page.evaluate(() => (document.querySelector('.chat-x') as HTMLElement).click());
       await clickText(page, '.bidbtn', '4');
       let gotMid = false;
       let gotDone = false;
@@ -198,6 +218,38 @@ async function main() {
     await viewer.waitForSelector('.spec');
     await sleep(900);
     await shot(viewer, 'ui-ph390-17-spectator.png');
+
+    // table chat: the spectator and a player talk, the host sees the badge, then opens the sheet
+    const say = async (pg: Page, text: string) => {
+      if (await pg.$eval('#chat-sheet', (e) => e.classList.contains('hidden'))) await pg.evaluate(() => (document.getElementById('chat-btn') as HTMLElement).click());
+      await pg.type('.chat-form input', text);
+      await pg.keyboard.press('Enter'); // Enter sends
+      await sleep(250);
+      await pg.evaluate(() => (document.querySelector('.chat-x') as HTMLElement).click());
+    };
+    await say(viewer, 'Nice bid, good luck!');
+    await say(guest, 'Thanks Vic, we need it');
+    await page.waitForFunction(() => document.querySelector('#chat-btn .cbadge')?.textContent === '2');
+    await sleep(200);
+    await shot(page, 'ui-ph390-chat-closed.png');
+    await page.evaluate(() => (document.getElementById('chat-btn') as HTMLElement).click());
+    await page.waitForSelector('.cmsg.watcher');
+    await page.type('.chat-form input', 'Ha, watch and learn');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelectorAll('.cmsg.mine').length === 1);
+    await sleep(300);
+    const overlap = await page.evaluate(() => {
+      const sheet = document.getElementById('chat-sheet')!.getBoundingClientRect();
+      const cards = [...document.querySelectorAll('.hand .cbtn')].map((c) => c.getBoundingClientRect());
+      return { sheetTop: sheet.top, cards: cards.length, lowest: Math.max(...cards.map((c) => c.bottom)), highest: Math.min(...cards.map((c) => c.top)) };
+    });
+    console.log('chat sheet top', overlap.sheetTop, 'lowest card bottom', overlap.lowest);
+    if (overlap.cards && overlap.lowest > overlap.sheetTop + 0.5) await shot(page, 'debug-fail.png');
+    if (overlap.cards && overlap.lowest > overlap.sheetTop + 0.5) throw new Error('chat sheet covers the hand: ' + JSON.stringify(overlap));
+    await shot(page, 'ui-ph390-chat-open.png');
+    await page.evaluate(() => (document.querySelector('.chat-x') as HTMLElement).click());
+    const hidden = await page.$eval('#chat-sheet', (e) => e.classList.contains('hidden'));
+    if (!hidden) throw new Error('chat did not close');
     await viewer.close();
     await guest.close();
     await page.evaluate(() => { window.confirm = () => true; });
@@ -208,8 +260,9 @@ async function main() {
     // --- bracket (Create Bracket) ---
     page = await newPage(browser, base, P, 'main'); // same token: Premium stays on
     await clickText(page, '.bigbtn', 'Play Online');
+    await setName(page, 'Avery'); // a name is required to host
     await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Create Bracket')))!.click());
-    await page.waitForSelector('.modal.small');
+    await page.waitForSelector('.modal.small').catch(async (e) => { await shot(page, 'debug-fail.png'); throw e; });
     await sleep(200);
     await shot(page, 'ui-ph390-18-create-bracket-modal.png');
     await clickText(page, '.modal.small .btn', 'Create');
@@ -233,6 +286,10 @@ async function main() {
     // --- Create Tournament (one to eight tables) ---
     page = await newPage(browser, base, P, 'main');
     await page.evaluate(() => { window.confirm = () => true; });
+    await clickText(page, '.bigbtn', 'Play Online');
+    await setName(page, 'Avery'); // a name is required to host
+    await page.keyboard.press('Escape');
+    await sleep(150);
     await clickText(page, '.pill-gold', 'Host a Tournament');
     await page.waitForSelector('.modal.small');
     await sleep(200);
