@@ -47,7 +47,7 @@ async function main() {
   // A: one human + bots to the end
   const a = new Bot(); await a.connect('Solo');
   a.auto = true;
-  a.send({ t: 'createTable', isPublic: true, target: 250 });
+  a.send({ t: 'createTable', isPublic: true, target: 250, practice: true }); // free users play bots only
   await a.wait((m) => m.t === 'table');
   a.send({ t: 'startTable' });
   const endA = await a.wait((m) => m.t === 'table' && m.phase === 'finished');
@@ -60,7 +60,8 @@ async function main() {
   hostB.send({ t: 'devToggleSubscription' });
   const sub = await hostB.wait((m) => m.t === 'subscription').catch(() => null);
   check(!!sub, 'D: dev subscription toggle works when DEV_UNLOCK=1 (skipped if the server runs without it)');
-  hostB.send({ t: 'createTable', isPublic: !sub, target: 250 });
+  if (!sub) throw new Error('this check needs a server started with DEV_UNLOCK=1 (only a Premium host can invite other humans)');
+  hostB.send({ t: 'createTable', isPublic: true, target: 250 });
   const t0 = await hostB.wait((m) => m.t === 'table');
   const others = [] as Bot[];
   for (const n of ['Bea', 'Cy', 'Di']) { const b = new Bot(); await b.connect(n); b.send({ t: 'joinCode', code: t0.code }); await b.wait((m) => m.t === 'table' && m.mySeat >= 0); others.push(b); }
@@ -83,6 +84,18 @@ async function main() {
   free.send({ t: 'createTable', isPublic: false, target: 250 });
   const up = await free.wait((m) => m.t === 'error');
   check(up.code === 'upgrade_required' && /Upgrade to host — \$\d+\.\d{2}\/month/.test(up.message), `D: free user gets "${up.message}"`);
+  // free users cannot make a table for others, match into other people's tables, or join by id; they get a solo game from quick play
+  const nTables = free.log.length;
+  free.send({ t: 'createTable', isPublic: true, target: 250 });
+  const inv = await free.wait((m) => m.t === 'error' && free.log.indexOf(m) >= nTables);
+  check(inv.code === 'upgrade_required' && /invite from a Premium host/.test(inv.message), `D: free user cannot create a public table ("${inv.message}")`);
+  free.send({ t: 'joinTable', id: 'deadbeef' });
+  const byId = await free.wait((m) => m.t === 'error' && free.log.indexOf(m) > free.log.indexOf(inv));
+  check(byId.code === 'upgrade_required', 'D: free user cannot join a table by id');
+  free.send({ t: 'quickPlay' });
+  const solo = await free.wait((m) => m.t === 'table');
+  check(solo.practice === true && solo.seats.filter((x: any) => x.kind === 'human').length === 1, 'D: free quickPlay is a solo practice table with bots');
+  free.send({ t: 'leaveTable' }); await free.wait((m) => m.t === 'left');
 
   // E: tournament (needs the dev toggle)
   if (sub) {

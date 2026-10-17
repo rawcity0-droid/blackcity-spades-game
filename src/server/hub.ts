@@ -56,6 +56,8 @@ export const hostIdFromToken = (token: string): string =>
   crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
 
 export const upgradeMessage = (): string => `Upgrade to host — $${formatPrice(CONFIG.subscriptionPriceUsdPerMonth)}/month`;
+export const inviteMessage = (): string => 'Playing with others needs an invite from a Premium host, or go Premium to host your own';
+export const hostNotPremiumMessage = (): string => 'That game was not made by a Premium host, so free players cannot join it. Ask a Premium host for a code, or go Premium';
 
 const NAME_REQUIRED: ReadonlySet<string> = new Set([
   'createTable', 'joinTable', 'watchTable', 'joinCode', 'watchCode', 'quickPlay',
@@ -176,6 +178,18 @@ export class Hub {
   }
   private isSubscribed(p: Player): boolean { return this.store.isSubscribed(p.id); }
 
+  /** True when this player may only play bots and join by invitation (free, and the one-setting rule is on). */
+  private needsInvite(p: Player): boolean { return CONFIG.hostOnly.playWithOthersNeedsInvite && !this.isSubscribed(p); }
+
+  /** A code is an invitation only when whoever made the table / tournament / event is a Premium member right now. */
+  private creatorIsPremium(creatorId: string | null | undefined): boolean { return !!creatorId && this.store.isSubscribed(creatorId); }
+
+  /** Who created the table; tables that belong to a tournament or event follow that organizer. */
+  private tableCreator(t: Table): string | null {
+    if (t.tournament) return this.tournaments.get(t.tournament.id)?.organizerId ?? this.events.get(t.tournament.id)?.organizerId ?? null;
+    return t.creatorId;
+  }
+
   // ---------- hello / identity ----------
 
   private hello(conn: Conn, msg: Extract<ClientMsg, { t: 'hello' }>): void {
@@ -214,6 +228,7 @@ export class Hub {
         codeLength: CONFIG.codeLength,
         rules: { loseScore: CONFIG.loseScore, bagLimit: CONFIG.bagLimit, bagPenalty: CONFIG.bagPenalty, nilBonus: CONFIG.nilBonus },
         devUnlock: this.devUnlock,
+        playWithOthersNeedsInvite: CONFIG.hostOnly.playWithOthersNeedsInvite,
       },
     });
     const table = p.tableId ? this.tables.get(p.tableId) : undefined;
@@ -341,11 +356,11 @@ export class Hub {
 
   // ---------- tables ----------
 
-  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; tournament?: { id: string; matchId: string; label: string } }): Table {
+  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; practice?: boolean; tournament?: { id: string; matchId: string; label: string } }): Table {
     const id = this.newId((x) => this.tables.has(x));
     const code = this.newCode();
     const table = new Table({
-      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, timings: this.timings,
+      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, timings: this.timings,
       tournament: opts.tournament, rng: this.rng,
       hooks: {
         send: (pid, msg) => this.send(pid, msg),
@@ -398,14 +413,16 @@ export class Hub {
   }
 
   private createTable(p: Player, isPublic: boolean, target: number, breakRule?: boolean, sandbags?: boolean, practice = false): void {
-    if (!isPublic && CONFIG.hostOnly.privateTables && !this.isSubscribed(p)) {
-      return this.err(p, 'upgrade_required', upgradeMessage());
+    if (!practice) {
+      if (!isPublic && CONFIG.hostOnly.privateTables && !this.isSubscribed(p)) return this.err(p, 'upgrade_required', upgradeMessage());
+      if (this.needsInvite(p)) return this.err(p, 'upgrade_required', inviteMessage());
     }
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
     if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
     this.leaveCurrent(p);
-    const table = this.makeTable({ isPublic, target, breakRule, sandbags, hostId: p.id });
+    // Practice is a solo table against bots: not public, so it is never listed or joinable by id, and joining it by code is refused too.
+    const table = this.makeTable({ isPublic: practice ? false : isPublic, target, breakRule, sandbags, hostId: p.id, practice });
     table.seatHuman(0, p.id, p.nick || (practice ? 'You' : ''), true);
     p.tableId = table.id;
     table.broadcast();
@@ -421,7 +438,10 @@ export class Hub {
   }
 
   private joinTable(p: Player, t: Table | undefined, byId: boolean): void {
+    if (byId && this.needsInvite(p)) return this.err(p, 'upgrade_required', inviteMessage()); // the lobby list is for watching; free players need a code
     if (!t || (byId && !t.isPublic)) return this.err(p, 'not_found', 'Table not found');
+    if (t.practice) return this.err(p, 'not_allowed', 'That is a solo practice table');
+    if (!byId && this.needsInvite(p) && !this.creatorIsPremium(this.tableCreator(t))) return this.err(p, 'not_allowed', hostNotPremiumMessage());
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
     this.leaveCurrent(p);
@@ -457,13 +477,15 @@ export class Hub {
   private quickPlay(p: Player): void {
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
-    const candidates = [...this.tables.values()]
-      .filter((t) => t.isPublic && !t.tournament && t.openSeats() > 0 && t.status !== 'finished')
+    // Free players do not get matched with other people: quick play is a solo practice game against bots for them.
+    const solo = this.needsInvite(p);
+    const candidates = solo ? [] : [...this.tables.values()]
+      .filter((t) => t.isPublic && !t.practice && !t.tournament && t.openSeats() > 0 && t.status !== 'finished')
       .sort((a, b) => (a.status === 'waiting' ? 0 : 1) - (b.status === 'waiting' ? 0 : 1) || b.humanCount() - a.humanCount());
     if (candidates.length > 0) return this.joinTable(p, candidates[0], true);
     if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
     this.leaveCurrent(p);
-    const table = this.makeTable({ isPublic: true, target: CONFIG.quickPlayTarget, hostId: p.id });
+    const table = this.makeTable({ isPublic: !solo, target: CONFIG.quickPlayTarget, hostId: p.id, practice: solo });
     table.seatHuman(0, p.id, p.nick, true);
     p.tableId = table.id;
     table.startGame(); // bots fill the other seats at once
@@ -502,7 +524,9 @@ export class Hub {
   }
 
   private joinTournament(p: Player, t: Tournament | undefined, byId: boolean): void {
+    if (byId && this.needsInvite(p)) return this.err(p, 'upgrade_required', inviteMessage());
     if (!t || (byId && !t.isPublic)) return this.err(p, 'not_found', 'Tournament not found');
+    if (this.needsInvite(p) && !this.creatorIsPremium(t.organizerId)) return this.err(p, 'not_allowed', hostNotPremiumMessage());
     if (p.tournamentId === t.id) return this.pushTournament(t);
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
@@ -603,6 +627,7 @@ export class Hub {
 
   private joinEvent(p: Player, ev: TableEvent | undefined): void {
     if (!ev) return this.err(p, 'not_found', 'Tournament not found');
+    if (this.needsInvite(p) && !this.creatorIsPremium(ev.organizerId)) return this.err(p, 'not_allowed', hostNotPremiumMessage());
     if (p.eventId === ev.id) return this.pushEvent(ev);
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);

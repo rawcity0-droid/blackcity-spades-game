@@ -4,6 +4,7 @@
 
 import fs from 'node:fs';
 import puppeteer, { Browser, Page } from 'puppeteer-core';
+import WebSocket from 'ws';
 import { startServer } from '../src/server/server.js';
 import { Billing } from '../src/server/billing.js';
 import { MockStripe, PRICE, SECRET } from '../test/mock-stripe.js';
@@ -150,7 +151,9 @@ async function main() {
     await page.waitForSelector('.photo-row .avatar img');
     await sleep(300);
     await shot(page, 'ui-ph390-05-play-online-modal.png');
-    await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Create Table')))!.click());
+    await page.keyboard.press('Escape'); // free users have no Create tiles: hosting is offered from the home card and the upgrade card
+    await sleep(150);
+    await clickText(page, '.pill-gold', 'Host a Tournament');
     await page.waitForSelector('.modal.small');
     await sleep(200);
     await shot(page, 'ui-ph390-06-premium-popup.png');
@@ -186,7 +189,7 @@ async function main() {
     await guest.waitForSelector('#display-name');
     await guest.type('#display-name', 'Gus');
     await guest.evaluate(() => (document.querySelector('#display-name') as HTMLElement).blur());
-    await guest.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join Table')))!.click());
+    await guest.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join')))!.click());
     await guest.waitForSelector('#code-input');
     await guest.type('#code-input', code.toLowerCase());
     await shot(guest, 'ui-ph390-12-join-code-modal.png');
@@ -211,7 +214,7 @@ async function main() {
     const viewer = await newPage(browser, base, P, 'view');
     await clickText(viewer, '.bigbtn', 'Play Online');
     await setName(viewer, 'Vic');
-    await viewer.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Watch Table')))!.click());
+    await viewer.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Watch')))!.click());
     await viewer.waitForSelector('#code-input');
     await viewer.type('#code-input', code);
     await clickText(viewer, '.modal.small .btn', 'Watch');
@@ -300,7 +303,7 @@ async function main() {
     const ej = await newPage(browser, base, P, 'ej');
     await clickText(ej, '.bigbtn', 'Play Online');
     await setName(ej, 'Eve');
-    await ej.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join Tournament')))!.click());
+    await ej.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join')))!.click());
     await ej.waitForSelector('#code-input');
     await ej.type('#code-input', ecode);
     await clickText(ej, '.modal.small .btn', 'Join');
@@ -340,7 +343,7 @@ async function main() {
     if (prefilled !== '' || placeholder !== 'Enter your name' || ac !== 'off') throw new Error(`name field: value=${prefilled} placeholder=${placeholder} autocomplete=${ac}`);
     await sleep(200);
     await shot(page, 'ui-ph390-name-blank.png');
-    await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join Table')))!.click());
+    await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join')))!.click());
     await page.waitForFunction(() => !document.querySelector('#name-error')?.hasAttribute('hidden'));
     const focused = await page.evaluate(() => document.activeElement?.id);
     if (focused !== 'display-name') throw new Error('name input not focused: ' + focused);
@@ -354,7 +357,9 @@ async function main() {
     page = await newPage(browser, pbase, P, 'rs');
     await clickText(page, '.bigbtn', 'Play Online');
     await setName(page, 'Avery');
-    await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Create Table')))!.click());
+    await page.keyboard.press('Escape');
+    await sleep(150);
+    await clickText(page, '.pill-gold', 'Host a Tournament'); // free users meet the Premium gate when they try to host
     await page.waitForSelector('.modal.small');
     await clickText(page, '.btn', 'Restore Premium / I’m the owner');
     await page.waitForSelector('#restore-email');
@@ -366,7 +371,9 @@ async function main() {
     await page.$eval('#restore-email', (e) => { (e as HTMLInputElement).value = ''; e.dispatchEvent(new Event('input')); });
     await page.type('#restore-email', ' Owner@Example.test ');
     await clickText(page, '.modal.small .btn', 'Restore Premium');
-    await page.waitForFunction(() => !document.querySelector('#restore-email') && /Premium active/.test(document.querySelector('.modal .lead')?.textContent ?? ''));
+    await page.waitForFunction(() => !document.querySelector('#restore-email'));
+    await clickText(page, '.bigbtn', 'Play Online'); // the host tiles are unlocked now
+    await page.waitForFunction(() => /Premium active/.test(document.querySelector('.modal .lead')?.textContent ?? '') && !!document.querySelector('.tiles'));
     await sleep(500);
     await shot(page, 'ui-ph390-restore-success.png');
     await page.close();
@@ -396,6 +403,41 @@ async function main() {
     await page.close();
     await sp.close();
     await mock.stop();
+
+    // --- free user: Play Online shows Practice / Watch / Join with a code / upgrade card; the list is watch-only ---
+    const hosts: WebSocket[] = [];
+    const premiumHost = async (nick: string, msg: object) => {
+      const ws = new WebSocket(base.replace('http', 'ws') + '/ws');
+      await new Promise((r) => ws.once('open', r));
+      ws.send(JSON.stringify({ t: 'hello', nick }));
+      ws.send(JSON.stringify({ t: 'devToggleSubscription' }));
+      await sleep(250);
+      ws.send(JSON.stringify(msg));
+      await sleep(250);
+      hosts.push(ws);
+    };
+    await premiumHost('Marlo', { t: 'createTable', isPublic: true, target: 250 });
+    await premiumHost('Dina', { t: 'createTournament', size: 8, isPublic: true });
+    page = await newPage(browser, base, P, 'freeuser');
+    await clickText(page, '.bigbtn', 'Play Online');
+    await page.waitForSelector('.tile.upgrade');
+    await page.waitForFunction(() => document.querySelectorAll('.open-tables .list-item').length === 2);
+    await sleep(300);
+    await shot(page, 'ui-ph390-free-play-online.png');
+    const free = await page.evaluate(() => ({
+      tiles: [...document.querySelectorAll('.tiles .tile b')].map((e) => e.textContent),
+      joinButtons: [...document.querySelectorAll('.open-tables .btn')].filter((e) => e.textContent === 'Join').length,
+      watchButtons: [...document.querySelectorAll('.open-tables .btn')].filter((e) => e.textContent === 'Watch').length,
+      note: document.querySelector('.open-tables .tiny')?.textContent,
+    }));
+    console.log('free play-online:', JSON.stringify(free));
+    if (free.joinButtons !== 0 || free.watchButtons !== 2 || !/Premium host/.test(free.note ?? '')) throw new Error('free lobby list is not watch-only');
+    await page.evaluate(() => { const m = document.querySelector('.modal') as HTMLElement; m.scrollTop = m.scrollHeight; document.querySelectorAll('.modal-body, .layer').forEach((e) => { (e as HTMLElement).scrollTop = (e as HTMLElement).scrollHeight; }); });
+    await sleep(300);
+    await shot(page, 'ui-ph390-free-lobby-watch-only.png');
+    await page.close();
+    for (const w of hosts) w.close();
+    await sleep(200);
 
     // --- desktop 1280x800 ---
     const D = { width: 1280, height: 800, mobile: false };

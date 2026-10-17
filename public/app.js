@@ -210,7 +210,7 @@ function handle(m) {
     case 'error':
       state.pendingStart = false;
       if (restoreUi.busy) { restoreDone(); if (modalOpen('restore') && restoreUi.setMsg) { restoreUi.setMsg(m.message); return; } }
-      if (m.code === 'upgrade_required') openPremiumGate();
+      if (m.code === 'upgrade_required') openPremiumGate(m.message);
       else if (m.code === 'name_required' && state.ui !== 'table') nameRequired();
       else toast(m.message);
       return;
@@ -405,10 +405,15 @@ function requirePremium(fn) {
   fn();
 }
 
-function openPremiumGate() {
+/** Free players only play bots, watch, and join a Premium host's game with its code. */
+const freeLimited = () => !state.subscribed && !(state.config && state.config.playWithOthersNeedsInvite === false);
+
+function openPremiumGate(message) {
+  closeModal('gate');
   const { el, body } = modalCard({ title: 'Premium feature', id: 'gate', cls: 'small' });
   body.append(
-    h('p', { class: 'lead', text: `Creating tables requires Premium — subscribe for $${price()}/mo. Joining with a friend’s code is free.` }),
+    h('p', { class: 'lead', text: message || `Hosting tables, tournaments, and brackets needs Premium ($${price()}/mo).` }),
+    h('p', { class: 'tiny', text: 'Anyone can watch any game and practise against bots. To play with friends, join a Premium host’s game with their code.' }),
     h('div', { class: 'btn-stack' },
       btn('soft', 'Not now', () => closeModal('gate')),
       btn('soft', 'Restore Premium / I’m the owner', () => { closeModal('gate'); openRestore(); }),
@@ -535,9 +540,10 @@ function openPlayModal() {
   fileInput.addEventListener('change', () => pickPhoto(fileInput.files[0], () => { closeModal('play'); openPlayModal(); }));
   const me = h('div', { class: 'avatar big' });
   if (state.avatar) me.append(h('img', { src: state.avatar, alt: 'Your profile photo' })); else me.textContent = 'YOU';
+  const limited = freeLimited();
   const sub = state.subscribed
     ? 'Premium active — host tables, tournaments, and brackets, or join with a code.'
-    : 'Join or watch free with a host’s code. Premium hosts create tables, tournaments, and brackets.';
+    : 'Watch any game, practise against bots, or join a Premium host’s game with their code.';
   const tile = (title, desc, fn) => h('button', { class: 'tile', type: 'button', onclick: () => { if (requireName(nameInput)) fn(); } },
     h('b', { text: title }), h('span', { text: desc }));
   refs.openTables = h('div', { class: 'open-tables' });
@@ -549,16 +555,28 @@ function openPlayModal() {
     h('div', { class: 'photo-row' }, me,
       h('div', {}, btn('outline', 'Choose profile photo', () => fileInput.click()),
         h('div', { class: 'tiny', text: 'Shown at your seat for this session.' })), fileInput),
-    ...(state.subscribed ? [] : [h('div', { class: 'prem-row light' },
+    ...(limited ? [] : state.subscribed ? [] : [h('div', { class: 'prem-row light' },
       h('button', { class: 'pill-gold', type: 'button', text: premiumLabel(), onclick: goPremium }), link('Restore Premium', openRestore))]),
-    h('div', { class: 'tiles' },
-      tile('Join Table — Free', `Enter the ${codeLen()}-character code from the host.`, () => openCodeModal('join')),
-      tile('Watch Table — Free', 'Enter a code for a no-hands spectator view, great for streaming.', () => openCodeModal('watch')),
-      tile('Join Tournament — Free', 'Enter the tournament code from the host.', () => openCodeModal('tournament')),
-      tile('Create Table', 'Premium host: make a private code and choose the rules.', () => requirePremium(createTable)),
-      tile('Create Tournament', 'Premium host: run one to eight tables.', () => requirePremium(openEventModal)),
-      tile('Create Bracket', 'Premium host: run a winner-advances bracket.', () => requirePremium(openBracketModal))),
-    h('div', { class: 'quick-row' }, link('Quick play at a public table', () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); })),
+    limited
+      ? h('div', { class: 'tiles' },
+        h('button', { class: 'tile', type: 'button', onclick: () => { closeModal('play'); startPractice(); } },
+          h('b', { text: 'Practice' }), h('span', { text: 'Play against bots on this device.' })),
+        tile('Watch a game', 'Any table or tournament, by code or from the list below.', () => openCodeModal('watch')),
+        h('button', { class: 'tile wide', type: 'button', onclick: () => { if (requireName(nameInput)) openCodeModal('join'); } },
+          h('b', { text: 'Join with a code' }), h('span', { text: 'Got an invite from a Premium host? Enter the code to play with friends.' })),
+        h('div', { class: 'tile upgrade' },
+          h('b', { text: 'Host a table or tournament' }),
+          h('span', { text: 'Premium hosts create tables, tournaments, and brackets and invite friends with a code.' }),
+          h('div', { class: 'prem-row light' },
+            h('button', { class: 'pill-gold', type: 'button', text: premiumLabel(), onclick: goPremium }), link('Restore Premium', openRestore))))
+      : h('div', { class: 'tiles' },
+        tile('Join Table — Free', `Enter the ${codeLen()}-character code from the host.`, () => openCodeModal('join')),
+        tile('Watch Table — Free', 'Enter a code for a no-hands spectator view, great for streaming.', () => openCodeModal('watch')),
+        tile('Join Tournament — Free', 'Enter the tournament code from the host.', () => openCodeModal('tournament')),
+        tile('Create Table', 'Premium host: make a private code and choose the rules.', () => requirePremium(createTable)),
+        tile('Create Tournament', 'Premium host: run one to eight tables.', () => requirePremium(openEventModal)),
+        tile('Create Bracket', 'Premium host: run a winner-advances bracket.', () => requirePremium(openBracketModal))),
+    h('div', { class: 'quick-row' }, link(limited ? 'Quick game against bots' : 'Quick play at a public table', () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); })),
     refs.openTables);
   openModal('play', el);
   fillOpenTables();
@@ -567,16 +585,29 @@ function openPlayModal() {
 function fillOpenTables() {
   const box = refs.openTables;
   if (!box || !box.isConnected) return;
-  const L = state.lobby && state.lobby.tables ? state.lobby.tables : [];
-  if (!L.length) { box.replaceChildren(); return; }
-  box.replaceChildren(h('div', { class: 'field-label', text: 'Open public tables' }), ...L.slice(0, 6).map((t) =>
-    h('div', { class: 'list-item' },
-      h('div', { class: 'info' },
-        h('div', { class: 'title', text: `${t.host}’s table` }),
-        h('div', { class: 'muted', text: `${t.humans}/4 people · to ${t.target} · ${t.status === 'waiting' ? 'not started' : 'in play'}` })),
-      h('div', { class: 'row' },
-        btn('small gold', 'Join', () => { if (requireName(refs.nameInput)) send({ t: 'joinTable', id: t.id }); }, { disabled: t.open <= 0 }),
-        btn('small soft', 'Watch', () => { if (requireName(refs.nameInput)) send({ t: 'watchTable', id: t.id }); })))));
+  const limited = freeLimited(); // free players watch from the list; they join with a Premium host's code instead
+  const tables = state.lobby && state.lobby.tables ? state.lobby.tables : [];
+  const tours = state.lobby && state.lobby.tournaments ? state.lobby.tournaments : [];
+  const note = limited ? h('div', { class: 'tiny', text: 'Ask a Premium host for a table code to play with friends.' }) : null;
+  if (!tables.length && !tours.length) { box.replaceChildren(...(note ? [note] : [])); return; }
+  const needName = (fn) => () => { if (requireName(refs.nameInput)) fn(); };
+  box.replaceChildren(
+    h('div', { class: 'field-label', text: limited ? 'Live games to watch' : 'Open public tables' }),
+    ...tables.slice(0, 6).map((t) =>
+      h('div', { class: 'list-item' },
+        h('div', { class: 'info' },
+          h('div', { class: 'title', text: `${t.host}’s table` }),
+          h('div', { class: 'muted', text: `${t.humans}/4 people · to ${t.target} · ${t.status === 'waiting' ? 'not started' : 'in play'}` })),
+        h('div', { class: 'row' },
+          limited ? null : btn('small gold', 'Join', needName(() => send({ t: 'joinTable', id: t.id })), { disabled: t.open <= 0 }),
+          btn(limited ? 'small gold' : 'small soft', 'Watch', needName(() => send({ t: 'watchTable', id: t.id })))))),
+    ...tours.slice(0, 4).map((t) =>
+      h('div', { class: 'list-item' },
+        h('div', { class: 'info' },
+          h('div', { class: 'title', text: `${t.organizer}’s bracket` }),
+          h('div', { class: 'muted', text: `${t.entrants}/${t.capacity} teams · ${t.state === 'registering' ? 'signing up' : 'in play'}` })),
+        h('div', { class: 'row' }, btn(limited ? 'small gold' : 'small soft', 'Watch', needName(() => { state.openSheet = true; send({ t: 'watchTournament', id: t.id }); }))))),
+    note);
 }
 
 function createTable() {
@@ -674,7 +705,7 @@ function openRules() {
     sec('Tournaments',
       `Bracket: single elimination, random seeding. Matches go to ${cfg.tournamentTargetEarly}; the final goes to ${cfg.tournamentTargetFinal}. A team whose players all leave forfeits.`,
       'Tournament (one to eight tables): everyone joins with the host’s code and is seated four to a table; bots fill empty seats. Each table plays one game and the winners are listed.',
-      'Joining and watching are always free. Premium hosts create tables, tournaments, and brackets.'));
+      'Watching is always free, and so is practice against bots. To play with other people you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets.'));
   openModal('rules', el);
 }
 
@@ -991,7 +1022,7 @@ function hostLobby(t) {
       chip(`First to ${r.target}`, () => send({ t: 'setRules', target: other })),
       chip(`Break rule ${r.breakRule ? 'on' : 'off'}`, () => send({ t: 'setRules', breakRule: !r.breakRule })),
       chip(`Sandbags ${r.sandbags ? 'on' : 'off'}`, () => send({ t: 'setRules', sandbags: !r.sandbags })),
-      h('span', { class: 'rchip', text: t.isPublic ? 'Public table' : 'Private · Premium host' })),
+      h('span', { class: 'rchip', text: t.practice ? 'Practice vs bots' : t.isPublic ? 'Public table' : 'Private · Premium host' })),
     h('div', { class: 'tiny center-text', text: host ? 'Host controls · tap a rule to change it' : 'Host controls · only the host can change the rules' }),
     h('div', { class: 'seatgrid' }, seatOrder.map((i) => seatCard(t, i))),
     h('div', { class: 'teambox' },

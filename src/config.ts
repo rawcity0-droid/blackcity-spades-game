@@ -47,9 +47,13 @@ export const CONFIG = {
   tournamentTargetEarly: 250, // every round except the final
   tournamentTargetFinal: 500, // the final (set equal to the early value for "250 everywhere")
 
-  // Free vs paid: free users can play bots, join public tables and tournaments;
-  // only a subscribed host may create PRIVATE tables and HOST tournaments.
-  hostOnly: { privateTables: true, hostTournaments: true },
+  // Free vs paid. Anyone can WATCH any game and play Practice vs bots. Playing with other humans needs an invite from a
+  // Premium host (their table / tournament code); Premium customers host tables, tournaments, brackets and invite others.
+  //   privateTables / hostTournaments: only a subscribed host may create private tables and host tournaments.
+  //   playWithOthersNeedsInvite: a free user cannot create a table with others, quick-match into other people's tables or join by
+  //     table id from the lobby; they can only join by code, and only when the table's host is a current Premium member.
+  //     Set false to let free users create / join public tables like before.
+  hostOnly: { privateTables: true, hostTournaments: true, playWithOthersNeedsInvite: true },
 
   // Server limits and timings (milliseconds)
   /** Table chat: players and watchers share one chat per table (also tournament tables). */

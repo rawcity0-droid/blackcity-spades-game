@@ -4,10 +4,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sanitizeChat, parseClientMessage } from '../src/server/protocol.js';
-import { Client, connect, sleep, testServer } from './helpers.js';
+import { Client, connect, connectPremium, sleep, testServer } from './helpers.js';
 
 async function tableWithHost(srv: { port: number }, nick = 'Hosty') {
-  const host = await connect(srv.port, nick);
+  const host = await connectPremium(srv.port, nick); // only a Premium host can create a table others can join
   host.c.send({ t: 'createTable', isPublic: true, target: 250 });
   const t = await host.c.waitFor((m) => m.t === 'table');
   return { ...host, table: t };
@@ -33,7 +33,7 @@ test('sanitizeChat: control chars and newlines become spaces, whitespace collaps
 });
 
 test('a player posts and everyone at the table gets it, with role and own-message flag', async () => {
-  const srv = await testServer();
+  const srv = await testServer({ devUnlock: true });
   try {
     const host = await tableWithHost(srv);
     const w = await watcher(srv, host.table.code, 'Eve');
@@ -53,7 +53,7 @@ test('a player posts and everyone at the table gets it, with role and own-messag
 });
 
 test('a spectator can chat (labelled watcher) and still never receives a hand', async () => {
-  const srv = await testServer();
+  const srv = await testServer({ devUnlock: true });
   try {
     const host = await tableWithHost(srv);
     const w = await watcher(srv, host.table.code, 'Eve');
@@ -73,7 +73,7 @@ test('a spectator can chat (labelled watcher) and still never receives a hand', 
 });
 
 test('chat needs a name and a table', async () => {
-  const srv = await testServer();
+  const srv = await testServer({ devUnlock: true });
   try {
     const nameless = (await connect(srv.port, '')).c;
     nameless.send({ t: 'chat', text: 'hi' });
@@ -91,7 +91,7 @@ test('chat needs a name and a table', async () => {
 });
 
 test('over-long and messy text is trimmed to 200 characters; empty messages are rejected', async () => {
-  const srv = await testServer();
+  const srv = await testServer({ devUnlock: true });
   try {
     const host = await tableWithHost(srv);
     host.c.send({ t: 'chat', text: 'a\u0007b\n' + 'z'.repeat(400) });
@@ -105,7 +105,7 @@ test('over-long and messy text is trimmed to 200 characters; empty messages are 
 });
 
 test('rate limit: 5 messages per 10 seconds per connection, then a friendly slow-down notice', async () => {
-  const srv = await testServer();
+  const srv = await testServer({ devUnlock: true });
   try {
     const host = await tableWithHost(srv);
     const w = await watcher(srv, host.table.code);
@@ -122,7 +122,7 @@ test('rate limit: 5 messages per 10 seconds per connection, then a friendly slow
 });
 
 test('history: the last 50 messages are kept and sent to anyone who joins or watches (once, with own flag)', async () => {
-  const srv = await testServer();
+  const srv = await testServer({ devUnlock: true });
   try {
     const host = await tableWithHost(srv);
     // the per-connection limit is 5 per 10 s, so use several connections to fill the history
@@ -155,9 +155,7 @@ test('history: the last 50 messages are kept and sent to anyone who joins or wat
 test('chat works at a tournament table, and is dropped with the table', async () => {
   const srv = await testServer({ devUnlock: true });
   try {
-    const org = await connect(srv.port, 'Orga');
-    org.c.send({ t: 'devToggleSubscription' });
-    await org.c.waitFor((m) => m.t === 'subscription');
+    const org = await connectPremium(srv.port, 'Orga');
     org.c.send({ t: 'createTable', isPublic: false, target: 250 });
     const t = await org.c.waitFor((m) => m.t === 'table');
     org.c.send({ t: 'chat', text: 'first' });

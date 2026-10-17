@@ -5,14 +5,15 @@ import { test } from 'node:test';
 import WebSocket from 'ws';
 import { CONFIG } from '../src/config.js';
 import { sanitizeNick } from '../src/server/protocol.js';
-import { Client, autoPlay, connect, sleep, testServer } from './helpers.js';
+import { hostNotPremiumMessage, inviteMessage } from '../src/server/hub.js';
+import { Client, autoPlay, connect, connectPremium, sleep, testServer } from './helpers.js';
 
 test('smoke: connect, create table, start with bots, play a hand to the end, close', async () => {
   const srv = await testServer();
   try {
     const { c, welcome } = await connect(srv.port, 'Smoke');
     assert.match(welcome.token, /^[a-f0-9]{32}$/);
-    c.send({ t: 'createTable', isPublic: true, target: 250 });
+    c.send({ t: 'createTable', isPublic: true, target: 250, practice: true }); // free users play bots only
     const t0 = await c.waitFor((m) => m.t === 'table');
     assert.equal(t0.phase, 'waiting');
     assert.equal(t0.mySeat, 0);
@@ -74,17 +75,20 @@ test('free tier: private tables and hosting tournaments need the host subscripti
   const srv = await testServer({ devUnlock: true });
   try {
     const { c } = await connect(srv.port, 'Free');
-    // Free users can create public (practice) tables
-    c.send({ t: 'createTable', isPublic: true, target: 250 });
+    // Free users can practice against bots, but cannot create a table for others
+    c.send({ t: 'createTable', isPublic: true, target: 250, practice: true });
     await c.waitFor((m) => m.t === 'table');
     c.send({ t: 'leaveTable' });
     await c.waitFor((m) => m.t === 'left');
+    c.send({ t: 'createTable', isPublic: true, target: 250 });
+    const e0 = await c.waitFor((m) => m.t === 'error' && m.code === 'upgrade_required');
+    assert.equal(e0.message, inviteMessage());
 
     c.send({ t: 'createTable', isPublic: false, target: 250 });
     const e1 = await c.waitFor((m) => m.t === 'error' && m.code === 'upgrade_required');
     assert.equal(e1.message, `Upgrade to host — $${CONFIG.subscriptionPriceUsdPerMonth.toFixed(2)}/month`);
     c.send({ t: 'createTournament', size: 4, isPublic: true });
-    await c.waitFor((m) => m.t === 'error' && m.code === 'upgrade_required' && m !== e1);
+    await c.waitFor((m) => m.t === 'error' && m.code === 'upgrade_required' && m !== e1 && m !== e0);
 
     // dev toggle on -> allowed
     c.send({ t: 'devToggleSubscription' });
@@ -235,9 +239,9 @@ test('spectating a table by id works only for public tables; private needs the c
 });
 
 test('a seated player is not a spectator and a spectator can later take a seat', async () => {
-  const srv = await testServer();
+  const srv = await testServer({ devUnlock: true });
   try {
-    const host = (await connect(srv.port, 'Host')).c;
+    const host = (await connectPremium(srv.port, 'Host')).c;
     host.send({ t: 'createTable', isPublic: true, target: 250 });
     const t = await host.waitFor((m) => m.t === 'table');
     const s = (await connect(srv.port, 'Sit')).c;
@@ -267,10 +271,10 @@ test('reconnect with the token keeps the seat after a refresh', async () => {
 });
 
 test('a player joining mid-hand is queued without any hand data, then seated at the next hand', async () => {
-  const srv = await testServer({ timings: { botDelayMs: 2, handPauseMs: 30 } });
+  const srv = await testServer({ devUnlock: true, timings: { botDelayMs: 2, handPauseMs: 30 } });
   try {
-    const host = (await connect(srv.port, 'Host')).c;
-    host.send({ t: 'quickPlay' }); // public table, started with bots
+    const host = (await connectPremium(srv.port, 'Host')).c;
+    host.send({ t: 'quickPlay' }); // Premium: a public table, started with bots
     const t = await host.waitFor((m) => m.t === 'table');
     autoPlay(host);
     const g = (await connect(srv.port, 'Late')).c;

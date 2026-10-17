@@ -43,6 +43,7 @@ export interface TableInit {
   breakRule?: boolean;
   sandbags?: boolean;
   hostId: string | null;
+  practice?: boolean; // a solo table against bots: never listed, never joinable by anyone else
   timings: Timings;
   hooks: TableHooks;
   rng?: Rng;
@@ -65,6 +66,9 @@ export class Table {
   sandbags: boolean;
   readonly tournament?: { id: string; matchId: string; label: string };
   hostId: string | null;
+  /** Who created the table; unlike hostId it never passes to someone else when the host leaves. Null for tournament tables. */
+  readonly creatorId: string | null;
+  readonly practice: boolean;
   seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
   watchers = new Set<string>();
   waiters: string[] = [];                 // watchers who asked for a seat; seated between hands
@@ -98,6 +102,8 @@ export class Table {
     this.breakRule = init.breakRule ?? true;
     this.sandbags = init.sandbags ?? true;
     this.hostId = init.hostId;
+    this.creatorId = init.hostId;
+    this.practice = init.practice === true;
     this.timings = init.timings;
     this.hooks = init.hooks;
     this.rng = init.rng ?? secureRng;
@@ -540,6 +546,7 @@ export class Table {
       id: this.id,
       code: this.code,
       isPublic: this.isPublic,
+      practice: this.practice,
       target: this.target,
       rules: { target: this.target, breakRule: this.breakRule, sandbags: this.sandbags },
       hostSeat: this.hostId ? this.seatOf(this.hostId) : -1,

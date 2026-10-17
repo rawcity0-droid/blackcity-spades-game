@@ -73,3 +73,11 @@ export function autoPlay(c: Client): void {
     else if (m.legal && m.legal.length > 0) c.send({ t: 'play', card: m.legal[0] });
   });
 }
+
+/** Connect and switch on Premium through the dev toggle (the server must be started with devUnlock). */
+export async function connectPremium(port: number, nick: string, token?: string): Promise<{ c: Client; welcome: any }> {
+  const r = await connect(port, nick, token);
+  r.c.send({ t: 'devToggleSubscription' });
+  await r.c.waitFor((m) => m.t === 'subscription' && m.subscribed === true);
+  return r;
+}

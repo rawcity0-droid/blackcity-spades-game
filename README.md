@@ -52,21 +52,40 @@ then `E2E_URL=ws://localhost:3388/ws E2E_MOCK_PORT=3389 npm run e2e:prod` (fake 
 Every business setting lives in **`src/config.ts`** (price, target scores, bracket sizes, limits, timings).
 The server sends the values the UI needs (price, targets) in the `welcome` message; the client never hard-codes them.
 
-| | Free | Host plan (`SUBSCRIPTION_PRICE_USD_PER_MONTH` = 1.99) |
-| --- | --- | --- |
-| Quick play, practice vs bots, public tables | yes | yes |
-| Join any tournament with a code | yes | yes |
-| Watch any table with a code | yes | yes |
-| Create **private** tables | no | yes |
-| **Host** tournaments | no | yes |
+**The rule (from the owner): anyone can watch any game; to play with other humans you must be invited by a Premium customer.**
+A free user's own play is Practice against bots. Premium customers host tables, tournaments and brackets and invite others with a code.
 
-A free user who taps **Create Table / Create Tournament / Create Bracket / Host a Tournament** sees the "Premium feature" popup
-("Creating tables requires Premium — subscribe for $1.99/mo. Joining with a friend's code is free."). The server still enforces the gate:
-the error code is `upgrade_required` with the message "Upgrade to host — $1.99/month" (price from the config, 2 decimals), and the
-client shows the same popup for it. The "Go Premium — $1.99/mo" labels are built from the server's config value too.
+| | Free | Premium (`SUBSCRIPTION_PRICE_USD_PER_MONTH` = 1.99) |
+| --- | --- | --- |
+| Practice vs bots (solo table, bots fill, nobody else can join) | yes | yes |
+| Quick play | a solo practice game vs bots | matches into open public tables, or starts one |
+| **Watch** any table or tournament (by code, or from the lobby list) | yes | yes |
+| Chat as a watcher or player | yes | yes |
+| **Join by code** a table, tournament, bracket or event | only if its host is **Premium right now** (the invitation) | yes |
+| Join a table or tournament **by id** from the lobby list | no (Watch only) | yes |
+| Create tables (public or private), tournaments, brackets, events | no | yes |
+
+Server-enforced in `src/server/hub.ts`, controlled by one setting, `CONFIG.hostOnly.playWithOthersNeedsInvite` (default `true`; `false` brings back
+free public tables and joining by id). For a free player:
+
+- `createTable` (not practice) and quick-match, `joinTable` by id and `joinTournament` by id are refused with `upgrade_required`
+  ("Playing with others needs an invite from a Premium host, or go Premium to host your own"); `createTournament` / `createEvent` with
+  "Upgrade to host — $1.99/month". `quickPlay` starts a solo practice game against bots instead.
+- `joinCode` (table, tournament, bracket or event) works only when whoever **created** it (the table's creator, which does not change when the
+  host leaves; the organizer for tournaments and their tables) is subscribed at that moment; otherwise `not_allowed` with "That game was not
+  made by a Premium host...". A watcher's "Take a seat" is a `joinCode` too, so the same rule applies.
+- A Practice table (`createTable {practice: true}`) is `practice: true` in the table view, never public or listed, and joining it by code is refused.
+- Watching is unchanged: `watchTable`, `watchCode`, `watchTournament`, and spectators still never receive hands.
+- Premium users and the email restore flow are unchanged.
+
+UI: a free user's **Play Online** modal shows Practice, Watch a game, Join with a code, and an upgrade card ("Host a table or tournament",
+Go Premium / Restore Premium). The lobby list is titled "Live games to watch", has **Watch** buttons only (tables and public brackets), and says
+"Ask a Premium host for a table code to play with friends". Premium users keep the full tile set and Join / Watch buttons.
+The "Premium feature" popup appears when a free user tries to host (the home card's Host a Tournament, or an `upgrade_required` reply) and shows the
+server's message. The "Go Premium — $1.99/mo" labels are built from the server's config value.
 
 **Display names.** There is no default or generated name anywhere. A new visitor sees an empty "Enter your name" field (autocomplete
-off). A name the user typed is remembered in that browser's `localStorage` only. Join Table, Watch Table, Join Tournament, Create Table,
+off). A name the user typed is remembered in that browser's `localStorage` only. Join, Watch, Create Table,
 Create Tournament, Create Bracket and Quick play are blocked until a non-empty name (after trimming) is entered: the client shows
 "Enter your name first" and focuses the field, and the server refuses the same actions with error code `name_required` and changes
 nothing. **Practice** (vs bots) does not need a name: it uses the name if one is set, otherwise the seat is "You"
@@ -184,7 +203,7 @@ saved settings are in `public/music-state.js`).
   If a team's bid is not met it loses 10 per bid trick.
 - Game ends at the target (500 default, 250 option; table setting) or at -200 (that team loses immediately). If both teams reach the target in the same hand,
   the higher score wins. If scores are exactly equal, more hands are played until one team is ahead.
-- Tournaments: free to join; 4, 8 or 16 teams; random seeding; single elimination; matches go to **250**, the **final to 500**
+- Tournaments: free to watch, and free to join with a Premium host's code; 4, 8 or 16 teams; random seeding; single elimination; matches go to **250**, the **final to 500**
   (`tournamentTargetEarly` / `tournamentTargetFinal`; set both to 250 for 250 everywhere). Solo joiners are paired in join order,
   a leftover solo gets a bot partner, empty team slots become bot teams. Bot-vs-bot matches are simulated instantly. Winners advance automatically.
   The bracket page shows the **champion and runner-up**. Only the organizer (creator) can start it.
@@ -209,7 +228,7 @@ Tables, brackets and multi-table tournaments share one code space: **6 character
 
 One page, no framework; the felt table is always on screen and everything else is a layer over it: the **home card** (Practice with a
 250 | 500 toggle, Play Online, Go Premium / Restore Premium, Host a Tournament, Rules), the **Play Online** modal (display name, profile
-photo, six tiles: Join Table, Watch Table, Join Tournament, Create Table, Create Tournament, Create Bracket), the **host lobby** modal
+photo, six tiles for Premium: Join Table, Watch Table, Join Tournament, Create Table, Create Tournament, Create Bracket; free users get Practice, Watch a game, Join with a code and an upgrade card), the **host lobby** modal
 (table code, rule chips for target / break rule / sandbags that the host taps to change, four seat cards in two teams, Add Bots,
 Swap partners, Start, enabled only when all 4 seats are filled), the Premium popup, the Restore Premium modal, a Rules modal written from
 the engine's rules (numbers come from the server config), and a menu (Play Online, Rules, Leave table, Restore Premium).
@@ -261,7 +280,7 @@ public/cards.js          card frame, corner indexes, pips, card back
 public/court-art.js      the 12 J/Q/K characters (swappable)
 public/music.js, music-state.js  table music (Web Audio, no files) and its saved settings / chord chart
 public/svg.js            SVG helper; public/cards.html + gallery.js: card gallery page (/cards.html)
-test/*.test.ts           engine, server, tournament, billing, chat and music-settings tests
+test/*.test.ts           engine, server, tournament, billing, chat, invite-only play and music-settings tests
 scripts/e2e.ts, scripts/e2e-prod.ts, scripts/screenshots.ts
 screenshots/             output of npm run screenshots
 ```
