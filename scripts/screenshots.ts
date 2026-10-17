@@ -209,6 +209,25 @@ async function main() {
     await page.waitForSelector('.hand .cbtn', { timeout: 30000 });
     await sleep(500);
     await shot(page, 'ui-ph390-16-private-table-started.png');
+    // the host gets a Back button in the bar under the hand; check it fits next to music + chat at 390 and 360 (even with the volume slider shown)
+    await page.click('#music-btn');
+    await sleep(200);
+    for (const [w, h] of [[390, 844], [360, 740]] as const) {
+      await page.setViewport({ width: w, height: h, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      await sleep(300);
+      const fit = await page.evaluate(() => {
+        const bar = document.getElementById('footbar')!;
+        const items = ['back-btn', 'music-btn', 'music-vol', 'chat-btn', 'conn'].map((id) => document.getElementById(id)!).filter((e) => e && !e.classList.contains('hidden')).map((e) => e.getBoundingClientRect());
+        const overlap = items.some((a, i) => items.some((b, j) => j > i && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5));
+        return { overflow: bar.scrollWidth > bar.clientWidth + 1, overlap, back: !document.getElementById('back-btn')!.classList.contains('hidden'), right: Math.max(...items.map((r) => r.right)), vw: window.innerWidth };
+      });
+      console.log(`host footbar at ${w}:`, JSON.stringify(fit));
+      if (!fit.back || fit.overflow || fit.overlap || fit.right > fit.vw) throw new Error(`host Back bar does not fit at ${w}: ${JSON.stringify(fit)}`);
+    }
+    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await page.click('#music-btn'); // music back off
+    await sleep(300);
+    await shot(page, 'ui-ph390-host-back.png');
 
     // spectator on a phone, watching that table by its code
     const viewer = await newPage(browser, base, P, 'view');
@@ -282,7 +301,7 @@ async function main() {
     await clickText(page, '.btn', 'Back to my table');
     await menuItem(page, 'Leave table');
     await page.waitForSelector('.sheet');
-    await clickText(page, '.btn', 'Leave tournament');
+    await clickText(page, '.btn', 'Back');
     await page.waitForSelector('.home-card');
     await page.close();
 
@@ -320,7 +339,7 @@ async function main() {
     await clickText(page, '.btn', 'Back to my table');
     await menuItem(page, 'Leave table');
     await page.waitForSelector('.sheet');
-    await clickText(page, '.btn', 'Leave tournament');
+    await clickText(page, '.btn', 'Back');
     await page.waitForSelector('.home-card');
     await page.close();
 

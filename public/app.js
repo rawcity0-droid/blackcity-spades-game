@@ -6,6 +6,7 @@
 import { cardName, renderBack, renderCard } from './cards.js';
 import { s as svg } from './svg.js';
 import { createMusic } from './music.js';
+import { sheetLeaveConfirm, sheetLeaveLabel, tableLeaveConfirm } from './leave-rules.js';
 import { parseMusicPrefs, serializeMusicPrefs } from './music-state.js';
 
 // ---------- helpers ----------
@@ -730,8 +731,8 @@ function openMenu() {
 function leaveTable() {
   const t = state.table;
   if (!t) return;
-  const playing = t.mySeat >= 0 && (t.phase === 'bidding' || t.phase === 'playing' || t.phase === 'handOver');
-  if (playing && !confirm('Leave this table? A bot will take your seat.')) return;
+  const msg = tableLeaveConfirm(t);
+  if (msg && !confirm(msg)) return;
   send({ t: 'leaveTable' });
 }
 
@@ -1000,7 +1001,7 @@ function seatCard(t, i) {
 }
 
 function hostLobby(t) {
-  const { el, body } = modalCard({ title: 'Play Online', id: 'lobby', cls: 'wide', onClose: () => send({ t: 'leaveTable' }) });
+  const { el, body } = modalCard({ title: 'Play Online', id: 'lobby', cls: 'wide', onClose: leaveTable });
   const r = t.rules || { target: t.target, breakRule: true, sandbags: true };
   const cfg = state.config || {};
   const targets = cfg.tableTargets || [250, 500];
@@ -1034,7 +1035,8 @@ function hostLobby(t) {
         btn('soft', 'Swap partners', () => send({ t: 'swapPartners' })),
         btn('gold', 'Start', () => send({ t: 'startTable' }), { disabled: !allFilled }))
       : h('div', { class: 'tiny center-text', text: 'Waiting for the host to start…' }),
-    host ? h('div', { class: 'tiny center-text', text: 'Add bots or invite players to fill all 4 seats, then start.' }) : null);
+    host ? h('div', { class: 'tiny center-text', text: 'Add bots or invite players to fill all 4 seats, then start.' }) : null,
+    host ? h('div', { class: 'btn-row' }, btn('outline', '‹ Back', leaveTable)) : null);
   return el;
 }
 
@@ -1131,10 +1133,10 @@ function renderBracketSheet() {
   }
   const row = h('div', { class: 'btn-row' });
   if (state.table) row.append(btn('gold', 'Back to my table', () => { state.ui = 'table'; render(); }));
-  const active = T.state === 'registering' || T.state === 'running';
-  const leaving = active && T.joined;
-  row.append(btn(leaving ? 'danger' : 'soft', leaving ? 'Leave tournament' : 'Close',
-    () => { if (!leaving || confirm('Leave the tournament? A bot takes your place.')) send({ t: 'leaveTournament' }); }));
+  const ask = sheetLeaveConfirm(T);
+  const cancels = T.isOrganizer && T.state === 'registering';
+  row.append(btn(ask ? (cancels || !T.isOrganizer ? 'danger' : 'soft') : 'soft', sheetLeaveLabel(T),
+    () => { if (!ask || confirm(ask)) send({ t: 'leaveTournament' }); }));
   sh.append(row);
   root.append(sh);
 }
@@ -1184,10 +1186,10 @@ function renderEventSheet() {
   }
   const row = h('div', { class: 'btn-row' });
   if (state.table) row.append(btn('gold', 'Back to my table', () => { state.ui = 'table'; render(); }));
-  const active = E.state === 'registering' || E.state === 'running';
-  const leaving = active && E.joined;
-  row.append(btn(leaving ? 'danger' : 'soft', leaving ? 'Leave tournament' : 'Close',
-    () => { if (!leaving || confirm('Leave the tournament? A bot takes your place.')) send({ t: 'leaveEvent' }); }));
+  const ask = sheetLeaveConfirm(E);
+  const cancels = E.isOrganizer && E.state === 'registering';
+  row.append(btn(ask ? (cancels || !E.isOrganizer ? 'danger' : 'soft') : 'soft', sheetLeaveLabel(E),
+    () => { if (!ask || confirm(ask)) send({ t: 'leaveEvent' }); }));
   sh.append(row);
   root.append(sh);
 }
@@ -1313,9 +1315,16 @@ function renderChatButton() {
   b.setAttribute('aria-expanded', String(chat.open));
   b.setAttribute('aria-label', chat.unread ? `Table chat, ${chat.unread} unread` : 'Table chat');
 }
+$('back-btn').append(icon(['M19 12H5', 'M11 6l-6 6 6 6'], 18), h('span', { text: 'Back' }));
+$('back-btn').addEventListener('click', leaveTable);
 $('chat-btn').addEventListener('click', () => (chat.open ? closeChat() : openChat()));
 function renderDock(t) {
   renderMusic();
+  // Back: the host's way out of a table screen (leave with the host hand-over / close described in leave-rules.js)
+  const back = $('back-btn');
+  const showBack = !!t && t.isHost && t.mySeat >= 0 && !t.tournament;
+  back.classList.toggle('hidden', !showBack);
+  $('footbar').classList.toggle('has-back', showBack);
   const show = !!t; // chat belongs to the table you are seated at or watching
   $('chat-btn').classList.toggle('hidden', !show);
   if (!show && chat.open) closeChat();

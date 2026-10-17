@@ -151,6 +151,19 @@ Dashboard and wait for the re-check). The automated tests and `npm run e2e:prod`
 the message returns `not_allowed` and the endpoint returns 404. With `DEV_UNLOCK=1` and no Stripe keys, Go Premium and Restore Premium just flip
 the flag (nothing is verified, no payment).
 
+## Back button (host / organizer)
+
+The host of a table gets a **Back** button in the bar under the hand (and a "‹ Back" button in the host lobby). It is the same as Leave table and
+asks first when leaving would affect other people (texts in `public/leave-rules.js`, unit tested); the server rules are unchanged:
+
+- Other people seated: "Go back? *Name* becomes the host and the table stays open for them." (before the start) or "Go back? A bot takes your seat and *Name*
+  becomes the host. The game goes on for the others." (mid-game). The host passes to the first connected human in seat order.
+- Host is the only person playing: "Go back? You are the only person playing, so this game ends and the table closes." (adds "...closes for the N people
+  watching" when there are watchers; watchers are sent back with "The table closed"). A practice game says "Your practice game will end."
+- An organizer's button in the bracket / tournament view is **Back**: before the start it cancels the tournament for everyone who joined
+  ("Go back? You are the organizer, so the tournament is cancelled for everyone who joined."); once running a bot takes the organizer's place and it goes on.
+- Players and watchers keep their existing Leave table / Leave tournament behavior.
+
 ## Spectating
 
 Anyone can enter a table's code and **watch live, read-only**: seat names, card counts, bids, the current trick, scores, and the
