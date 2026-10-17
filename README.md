@@ -151,6 +151,18 @@ Dashboard and wait for the re-check). The automated tests and `npm run e2e:prod`
 the message returns `not_allowed` and the endpoint returns 404. With `DEV_UNLOCK=1` and no Stripe keys, Go Premium and Restore Premium just flip
 the flag (nothing is verified, no payment).
 
+## Cover screen
+
+Opening the game shows a full-screen cover first: the photo `public/cover.jpg` (about 240 KB, `object-fit: cover` around the man in black, fading to
+black at the top and bottom), the title "Blackcity Spades", "Spades with friends" and a large **Play** button (focused, so Enter works). Play reveals the
+normal home screen.
+
+- Shown once per browser tab (a `sessionStorage` flag), so a reload does not show it again. `?cover=1` forces it for testing.
+- Not shown when you are resuming a table, tournament or event (the client hides it as soon as the server sends one), or when the link has a purpose
+  (`?code=...` invite, or the return from Stripe Checkout).
+- Logic: `public/cover-rules.js` (tested in `test/cover.test.ts`). Safe-area insets are respected and the entrance animation is off with reduced motion.
+  To swap the picture, replace `public/cover.jpg` (landscape, about 16:9, empty dark space in the top fifth for the title).
+
 ## Back, Return to game and Leave
 
 Going back and leaving are two different things, so you can go back and forth in the same game:

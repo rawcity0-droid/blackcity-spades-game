@@ -7,6 +7,7 @@ import { cardName, renderBack, renderCard } from './cards.js';
 import { s as svg } from './svg.js';
 import { createMusic } from './music.js';
 import { activeGame, canGoBack, navAfterEnd, navAfterSheet, navAfterTable, returnSummary, sheetLeaveConfirm, sheetLeaveLabel, tableLeaveConfirm } from './leave-rules.js';
+import { shouldShowCover } from './cover-rules.js';
 import { parseMusicPrefs, serializeMusicPrefs } from './music-state.js';
 
 // ---------- helpers ----------
@@ -35,6 +36,7 @@ const KEY_TOKEN = 'spades_token' + sfx;
 const KEY_NICK = 'spades_nick' + sfx;
 const KEY_PRACTICE = 'spades_practice' + sfx;
 const KEY_AVATAR = 'spades_avatar' + sfx;
+const KEY_COVER = 'spades_cover' + sfx; // sessionStorage: the cover screen was already shown in this tab
 const KEY_MUSIC = 'spades_music' + sfx; // {on, vol}: table music on/off and volume
 const mkStore = (area) => ({
   get: (k) => { try { return area().getItem(k); } catch { return null; } },
@@ -171,6 +173,7 @@ function handle(m) {
       break;
     }
     case 'table': {
+      hideCover(); // resuming a seat goes straight to the game
       const isNew = !state.table || state.table.id !== m.id;
       state.table = m;
       if (isNew) { closeAllModals(); chatReset(); }
@@ -191,6 +194,7 @@ function handle(m) {
       if (m.reason) toast(m.reason);
       break;
     case 'tournament':
+      hideCover();
       state.tour = m;
       if (state.ui !== 'table' && (m.joined || state.openSheet)) { const n = navAfterSheet(state, 'tournament', m.joined, state.openSheet); if (n.ui !== state.ui) closeAllModals(); applyNav(n); }
       state.openSheet = false;
@@ -202,6 +206,7 @@ function handle(m) {
       if (m.reason) toast(m.reason);
       break;
     case 'event':
+      hideCover();
       state.event = m;
       if (state.ui !== 'table' && (m.joined || state.openSheet)) { const n = navAfterSheet(state, 'event', m.joined, state.openSheet); if (n.ui !== state.ui) closeAllModals(); applyNav(n); }
       state.openSheet = false;
@@ -1386,6 +1391,32 @@ function renderDock(t) {
   if (!show && chat.open) closeChat();
 }
 
+// ---------- cover screen ----------
+let coverEl = null;
+function hideCover() {
+  if (!coverEl) return;
+  coverEl.remove();
+  coverEl = null;
+  $('app').inert = false;
+}
+function showCover() {
+  const play = h('button', { class: 'cover-play', type: 'button', 'aria-label': 'Play Blackcity Spades', onclick: hideCover },
+    h('span', { text: 'Play' }), iconArrow());
+  coverEl = h('section', { class: 'cover', 'aria-label': 'Blackcity Spades' },
+    h('img', { class: 'cover-img', src: '/cover.jpg', alt: 'Four friends playing cards around a green table', decoding: 'async', draggable: 'false' }),
+    h('div', { class: 'cover-copy' },
+      h('h1', { class: 'cover-title', text: 'Blackcity Spades' }),
+      h('p', { class: 'cover-tag', text: 'Spades with friends' })),
+    h('div', { class: 'cover-actions' }, play));
+  $('app').inert = true; // keyboard and screen readers stay on the cover until Play
+  document.body.append(coverEl);
+  play.focus();
+}
+
 // ---------- boot ----------
 render();
 connect();
+if (shouldShowCover({ forced: params.get('cover') === '1', seen: !!session.get(KEY_COVER), deepLink: !!(urlCode || urlPremium) })) {
+  session.set(KEY_COVER, '1');
+  showCover();
+}

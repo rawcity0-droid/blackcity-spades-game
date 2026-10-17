@@ -59,6 +59,8 @@ const SIZES: Size[] = [
 async function newPage(browser: Browser, base: string, s: { width: number; height: number; mobile: boolean }, slot: string, dpr = 2): Promise<Page> {
   const page = await browser.newPage();
   await page.setViewport({ width: s.width, height: s.height, deviceScaleFactor: dpr, isMobile: s.mobile, hasTouch: s.mobile });
+  // the cover screen shows once per tab: mark it as seen so the other shots go straight to the home screen
+  await page.evaluateOnNewDocument((k) => { try { sessionStorage.setItem(k, '1'); } catch { /* ignore */ } }, 'spades_cover_' + slot);
   await page.goto(base + '/?slot=' + slot, { waitUntil: 'load' });
   await page.waitForSelector('.home-card');
   await page.waitForFunction(() => document.querySelector('.tbl-open')?.textContent === 'Table open');
@@ -132,6 +134,35 @@ async function main() {
 
     // --- phone flow: modals, host lobby, premium gate, restore ---
     const P = { width: 390, height: 844, mobile: true };
+
+    // --- cover screen: phone, tablet portrait, tablet landscape (and Play reveals the unchanged home screen) ---
+    const coverSizes: [string, number, number, boolean][] = [['ui-cover-phone.png', 390, 844, true], ['ui-cover-tablet.png', 768, 1024, true], ['ui-cover-tablet-landscape.png', 1024, 768, true]];
+    for (const [name, width, height, mobile] of coverSizes) {
+      const cp = await browser.newPage();
+      await cp.setViewport({ width, height, deviceScaleFactor: 2, isMobile: mobile, hasTouch: mobile });
+      await cp.goto(base + '/?slot=cov&cover=1', { waitUntil: 'load' });
+      await cp.waitForSelector('.cover .cover-play');
+      await cp.waitForFunction(() => { const i = document.querySelector<HTMLImageElement>('.cover-img'); return !!i && i.complete && i.naturalWidth > 0; });
+      await sleep(1200); // let the entrance animation finish
+      const fit = await cp.evaluate(() => {
+        const play = document.querySelector<HTMLElement>('.cover-play')!;
+        return { title: document.querySelector('.cover-title')!.getBoundingClientRect().toJSON(), tag: document.querySelector('.cover-tag')!.getBoundingClientRect().toJSON(), play: play.getBoundingClientRect().toJSON(), vw: innerWidth, vh: innerHeight, focused: document.activeElement === play, label: play.getAttribute('aria-label'), alt: document.querySelector('.cover-img')!.getAttribute('alt'), inert: (document.getElementById('app') as HTMLElement & { inert: boolean }).inert };
+      });
+      console.log(name, JSON.stringify(fit));
+      if (fit.title.left < 0 || fit.title.right > fit.vw || fit.play.left < 0 || fit.play.right > fit.vw || fit.play.bottom > fit.vh || fit.tag.bottom > fit.play.top || fit.title.bottom > fit.tag.top || !fit.focused || !fit.label || !fit.alt || !fit.inert) throw new Error('cover layout/a11y problem: ' + JSON.stringify(fit));
+      await shot(cp, name);
+      if (name === 'ui-cover-phone.png') {
+        await cp.reload({ waitUntil: 'load' }); // forced again by ?cover=1
+        await cp.waitForSelector('.cover');
+        await cp.keyboard.press('Enter'); // keyboard: the focused Play button
+        await cp.waitForSelector('.home-card');
+        if (await cp.$('.cover')) throw new Error('Play should hide the cover');
+        await cp.goto(base + '/?slot=cov', { waitUntil: 'load' }); // same tab, session flag set: no cover on a reload
+        await cp.waitForSelector('.home-card');
+        if (await cp.$('.cover')) throw new Error('cover shown twice in one session');
+      }
+      await cp.close();
+    }
     page = await newPage(browser, base, P, 'main');
     await clickText(page, '.bigbtn', 'Play Online');
     await page.waitForSelector('.tiles');
