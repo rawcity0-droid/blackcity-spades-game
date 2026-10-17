@@ -54,11 +54,10 @@ function stripPremiumParams() {
   history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
 }
 
-// Only a name this user typed is remembered. The old v1 auto-generated 'Player####' names are discarded.
+// The name field always starts blank on every page load. Old saved names (including v1 'Player####') are deleted.
 function savedNick() {
-  const v = (store.get(KEY_NICK) || '').trim();
-  if (/^Player\d{4}$/.test(v)) { store.del(KEY_NICK); return ''; }
-  return v;
+  store.del(KEY_NICK);
+  return '';
 }
 
 // ---------- state ----------
@@ -148,7 +147,7 @@ function handle(m) {
       handlePremiumReturn();
       if (urlCode && !urlCodeUsed && !state.table) { urlCodeUsed = true; openCodeModal('join', urlCode); } // ?code=ABC234 opens the join box
       break;
-    case 'nick': state.nick = m.nick; store.set(KEY_NICK, m.nick); return;
+    case 'nick': state.nick = m.nick; return;
     case 'lobby': state.lobby = m; fillOpenTables(); return;
     case 'notice': toast(m.message, 5500); return;
     case 'restoreResult': onRestoreResult(m); return;
@@ -279,7 +278,6 @@ function commitName(value) {
   const nick = (value ?? state.nick ?? '').replace(/\s+/g, ' ').trim().slice(0, 16);
   if (nick !== state.nick) send({ t: 'setNick', nick });
   state.nick = nick;
-  if (nick) store.set(KEY_NICK, nick); else store.del(KEY_NICK);
 }
 
 /** Joining, watching and creating all need a name. Shows the inline message and focuses the field when it is empty. */
