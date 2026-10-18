@@ -66,6 +66,7 @@ test('quickPlay for a lone free user ends up in a practice game against bots, an
     const t = await free.waitFor((m) => m.t === 'table');
     assert.notEqual(t.id, host.table.id);
     assert.equal(t.practice, true);
+    assert.equal(t.quick, true, 'labelled Quick play, not Practice');
     assert.equal(t.seats.filter((s: any) => s.kind === 'human').length, 1);
     const tbl = srv.hub['tables'].get(host.table.id);
     assert.equal(tbl.humanCount(), 1, 'the Premium host table did not get the free player');

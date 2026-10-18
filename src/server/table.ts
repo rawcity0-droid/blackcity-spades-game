@@ -44,6 +44,7 @@ export interface TableInit {
   sandbags?: boolean;
   hostId: string | null;
   practice?: boolean; // a solo table against bots: never listed, never joinable by anyone else
+  quick?: boolean; // made by Quick play (random match): only changes how the table is labelled
   timings: Timings;
   hooks: TableHooks;
   rng?: Rng;
@@ -69,6 +70,7 @@ export class Table {
   /** Who created the table; unlike hostId it never passes to someone else when the host leaves. Null for tournament tables. */
   readonly creatorId: string | null;
   readonly practice: boolean;
+  readonly quick: boolean;
   seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
   watchers = new Set<string>();
   waiters: string[] = [];                 // watchers who asked for a seat; seated between hands
@@ -104,6 +106,7 @@ export class Table {
     this.hostId = init.hostId;
     this.creatorId = init.hostId;
     this.practice = init.practice === true;
+    this.quick = init.quick === true;
     this.timings = init.timings;
     this.hooks = init.hooks;
     this.rng = init.rng ?? secureRng;
@@ -547,6 +550,7 @@ export class Table {
       code: this.code,
       isPublic: this.isPublic,
       practice: this.practice,
+      quick: this.quick,
       target: this.target,
       rules: { target: this.target, breakRule: this.breakRule, sandbags: this.sandbags },
       hostSeat: this.hostId ? this.seatOf(this.hostId) : -1,

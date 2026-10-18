@@ -33,6 +33,7 @@ test('host who is the only person playing: the table closes, and watchers are me
   assert.match(tableLeaveConfirm({ ...solo, spectators: 2 }), /closes for the 2 people watching\.$/);
   assert.match(tableLeaveConfirm({ ...solo, spectators: 1 }), /the 1 person watching\.$/);
   assert.equal(tableLeaveConfirm({ ...solo, practice: true }), 'Leave this table? Your practice game will end.');
+  assert.equal(tableLeaveConfirm({ ...solo, practice: true, quick: true }), 'Leave this table? Your game will end.', 'a Quick play table is never called practice');
   assert.equal(tableLeaveConfirm(table()), null, 'an empty lobby with nobody else can just be left');
   assert.equal(tableLeaveConfirm(table({ spectators: 3 })), 'Leave this table? The table closes. The table also closes for the 3 people watching.');
 });

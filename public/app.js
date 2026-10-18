@@ -1138,7 +1138,7 @@ function hostLobby(t) {
       chip(`First to ${r.target}`, () => send({ t: 'setRules', target: other })),
       chip(`Break rule ${r.breakRule ? 'on' : 'off'}`, () => send({ t: 'setRules', breakRule: !r.breakRule })),
       chip(`Sandbags ${r.sandbags ? 'on' : 'off'}`, () => send({ t: 'setRules', sandbags: !r.sandbags })),
-      h('span', { class: 'rchip', text: t.practice ? 'Practice vs bots' : t.isPublic ? 'Public table' : 'Private · Premium host' })),
+      h('span', { class: 'rchip', text: t.quick ? 'Quick play' : t.practice ? 'Practice vs bots' : t.isPublic ? 'Public table' : 'Private · Premium host' })),
     h('div', { class: 'tiny center-text', text: host ? 'Host controls · tap a rule to change it' : 'Host controls · only the host can change the rules' }),
     h('div', { class: 'seatgrid' }, seatOrder.map((i) => seatCard(t, i))),
     h('div', { class: 'teambox' },

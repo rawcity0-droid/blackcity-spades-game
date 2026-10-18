@@ -364,11 +364,11 @@ export class Hub {
 
   // ---------- tables ----------
 
-  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; practice?: boolean; tournament?: { id: string; matchId: string; label: string } }): Table {
+  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; practice?: boolean; quick?: boolean; tournament?: { id: string; matchId: string; label: string } }): Table {
     const id = this.newId((x) => this.tables.has(x));
     const code = this.newCode();
     const table = new Table({
-      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, timings: this.timings,
+      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, quick: opts.quick, timings: this.timings,
       tournament: opts.tournament, rng: this.rng,
       hooks: {
         send: (pid, msg) => this.send(pid, msg),
@@ -565,7 +565,7 @@ export class Hub {
     const people = ids.map((id) => this.players.get(id)!);
     if (this.tables.size >= CONFIG.limits.maxTables) { for (const p of people) { this.send(p.id, { t: 'matching', active: false }); this.err(p, 'too_many', 'The server is busy. Try again soon'); } return; }
     const solo = people.length === 1;
-    const table = this.makeTable({ isPublic: false, target: CONFIG.quickPlayTarget, hostId: people[0].id, practice: solo });
+    const table = this.makeTable({ isPublic: false, target: CONFIG.quickPlayTarget, hostId: people[0].id, practice: solo, quick: true });
     people.forEach((p, i) => { this.leaveCurrent(p); table.seatHuman(i, p.id, p.nick, true); p.tableId = table.id; });
     const bots = 4 - people.length;
     const message = bots === 0 ? 'Four players found. Good luck!'

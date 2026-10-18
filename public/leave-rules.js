@@ -32,7 +32,7 @@ export function tableLeaveConfirm(t) {
       : t.phase === 'waiting' ? `Leave this table? ${heir} becomes the host and the table stays open for them.` : null;
   }
   const watching = t.spectators ? ` The table also closes for the ${t.spectators} ${t.spectators === 1 ? 'person' : 'people'} watching.` : '';
-  if (inPlay) return t.practice ? 'Leave this table? Your practice game will end.' : `Leave this table? You are the only person playing, so this game ends and the table closes.${watching}`;
+  if (inPlay) return t.practice ? (t.quick ? 'Leave this table? Your game will end.' : 'Leave this table? Your practice game will end.') : `Leave this table? You are the only person playing, so this game ends and the table closes.${watching}`;
   if (t.phase === 'waiting' && t.spectators) return `Leave this table? The table closes.${watching}`;
   return null;
 }
