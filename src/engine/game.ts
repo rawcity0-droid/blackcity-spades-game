@@ -47,6 +47,7 @@ export interface GameState {
   target: number;
   breakRule: boolean;   // true: spades cannot be led until broken (default). false: lead spades any time.
   sandbags: boolean;    // true: bags are counted and penalised (default). false: no bag points, no counting, no penalty.
+  teamMin: number;      // the two partners' bids must add up to at least this (0 = no team minimum)
   rng: Rng;
   phase: Phase;
   handNo: number;
@@ -64,13 +65,14 @@ export interface GameState {
   winner: Team | null;
 }
 
-export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean }
+export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean; teamMin?: number }
 
 export function createGame(opts: GameOptions = {}): GameState {
   const g: GameState = {
     target: opts.target ?? 500,
     breakRule: opts.breakRule ?? true,
     sandbags: opts.sandbags ?? true,
+    teamMin: opts.teamMin ?? 0,
     rng: opts.rng ?? secureRng,
     phase: 'bidding',
     handNo: 0,
@@ -112,18 +114,31 @@ export function nextHand(g: GameState): void {
 
 // ---------- bidding ----------
 
-/** Bids a player may make: minBid..maxBid (CONFIG.rules), plus 0 = Nil when CONFIG.rules.allowNil. */
-export function legalBids(): number[] {
+/**
+ * Bids a player may make: minBid..maxBid (CONFIG.rules), plus 0 = Nil when CONFIG.rules.allowNil.
+ * With a game and a seat, a team minimum (g.teamMin) is applied too: once a partner has bid, this player's bid plus the partner's must reach it
+ * (Nil counts as 0, so after a partner's Nil the bid must be the whole minimum, and Nil is only open when the partner already reached it).
+ */
+export function legalBids(g?: GameState, seat?: number): number[] {
   const { minBid, maxBid, allowNil } = CONFIG.rules;
   const bids = Array.from({ length: maxBid - minBid + 1 }, (_, i) => minBid + i);
-  return allowNil ? [0, ...bids] : bids;
+  const all = allowNil ? [0, ...bids] : bids;
+  if (!g || seat === undefined || !g.teamMin) return all;
+  const partnerBid = g.bids[partnerOf(seat)];
+  if (partnerBid === null || partnerBid === undefined) return all;
+  return all.filter((b) => b + partnerBid >= g.teamMin);
 }
 
 export function placeBid(g: GameState, seat: number, bid: number): void {
   if (g.phase !== 'bidding') throw new EngineError('Not bidding');
   if (seat !== g.turn) throw new EngineError('Not your turn');
-  if (!legalBids().includes(bid)) {
+  if (!legalBids(g, seat).includes(bid)) {
     const { minBid, maxBid, allowNil } = CONFIG.rules;
+    const partnerBid = g.bids[partnerOf(seat)];
+    if (g.teamMin && partnerBid !== null && partnerBid !== undefined && legalBids().includes(bid)) {
+      const need = Math.max(0, g.teamMin - partnerBid);
+      throw new EngineError(`You and your partner must bid at least ${g.teamMin} together, so bid ${need} or more`);
+    }
     throw new EngineError(`Bid must be ${minBid} to ${maxBid}${allowNil ? ' (or Nil)' : ''}`);
   }
   g.bids[seat] = bid;

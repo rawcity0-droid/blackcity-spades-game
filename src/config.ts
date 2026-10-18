@@ -30,9 +30,11 @@ export const CONFIG = {
   spectatePrivateTables: SPECTATE_PRIVATE_TABLES,
   subscriptionPriceUsdPerMonth: SUBSCRIPTION_PRICE_USD_PER_MONTH,
 
-  // Bidding: the only restriction on a bid. A bid is a whole number of books from minBid to maxBid. allowNil also lets a player bid
-  // Nil (0 books, scored separately); set it to false for a strict "at least minBid" game. Nothing else limits bids (no team or total minimum).
-  rules: { minBid: 4, maxBid: 13, allowNil: true },
+  // Bidding. Regular spades: a bid is a whole number of books from minBid to maxBid, and allowNil also lets a player bid Nil (0 books, scored
+  // separately). On a table hosted by a Premium customer (and in their tournaments) there is also a TEAM minimum: the two partners' bids must
+  // add up to at least premiumTeamMin (the player who bids second may not go below what is needed). Either partner can bid 1, 2 or 3 as long as
+  // the pair reaches it. Free "Play now" (random match) tables use the regular rules with no team minimum. Set premiumTeamMin to 0 to turn it off.
+  rules: { minBid: 1, maxBid: 13, allowNil: true, premiumTeamMin: 4 },
 
   // Rules
   loseScore: -200,        // a team at or below this loses immediately

@@ -368,7 +368,7 @@ export class Hub {
     const id = this.newId((x) => this.tables.has(x));
     const code = this.newCode();
     const table = new Table({
-      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, quick: opts.quick, timings: this.timings,
+      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, quick: opts.quick, teamMin: opts.quick || opts.practice ? 0 : CONFIG.rules.premiumTeamMin, timings: this.timings,
       tournament: opts.tournament, rng: this.rng,
       hooks: {
         send: (pid, msg) => this.send(pid, msg),

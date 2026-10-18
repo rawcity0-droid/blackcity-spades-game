@@ -44,6 +44,7 @@ export interface TableInit {
   sandbags?: boolean;
   hostId: string | null;
   practice?: boolean; // a solo table against bots: never listed, never joinable by anyone else
+  teamMin?: number; // the partners' bids must add up to at least this (Premium-hosted tables); 0 or unset = regular spades
   quick?: boolean; // made by Quick play (random match): only changes how the table is labelled
   timings: Timings;
   hooks: TableHooks;
@@ -71,6 +72,7 @@ export class Table {
   readonly creatorId: string | null;
   readonly practice: boolean;
   readonly quick: boolean;
+  readonly teamMin: number;
   seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
   watchers = new Set<string>();
   waiters: string[] = [];                 // watchers who asked for a seat; seated between hands
@@ -107,6 +109,7 @@ export class Table {
     this.creatorId = init.hostId;
     this.practice = init.practice === true;
     this.quick = init.quick === true;
+    this.teamMin = init.teamMin ?? 0;
     this.timings = init.timings;
     this.hooks = init.hooks;
     this.rng = init.rng ?? secureRng;
@@ -280,7 +283,7 @@ export class Table {
   startGame(): void {
     this.seats.forEach((s, i) => { if (s.kind === 'empty') this.seatBot(i); });
     this.teamHadHumans = [0, 1].map((t) => this.seats.some((s, i) => i % 2 === t && s.kind === 'human')) as [boolean, boolean];
-    this.game = createGame({ target: this.target, breakRule: this.breakRule, sandbags: this.sandbags, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
+    this.game = createGame({ target: this.target, breakRule: this.breakRule, sandbags: this.sandbags, teamMin: this.teamMin, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
     this.status = 'playing';
     this.resetHandFlags();
     this.broadcast();
@@ -551,6 +554,7 @@ export class Table {
       isPublic: this.isPublic,
       practice: this.practice,
       quick: this.quick,
+      bidRules: { minBid: CONFIG.rules.minBid, maxBid: CONFIG.rules.maxBid, allowNil: CONFIG.rules.allowNil, teamMin: this.teamMin },
       target: this.target,
       rules: { target: this.target, breakRule: this.breakRule, sandbags: this.sandbags },
       hostSeat: this.hostId ? this.seatOf(this.hostId) : -1,

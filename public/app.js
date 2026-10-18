@@ -739,7 +739,8 @@ function openRules() {
       'Four players in two partnerships: you and the player across from you against the other pair. One 52-card deck, 13 cards each. Spades are always trump.',
       `A game is played over several hands. The first team to reach the target score wins. Tables play to ${targets}.`),
     sec('Bidding',
-      `Starting left of the dealer, each player bids how many tricks they expect to win. The lowest bid is ${bid.minBid} and the highest is ${bid.maxBid}${bid.allowNil ? ', or you can bid Nil (0)' : ''}. You can’t change a bid.`,
+      `Starting left of the dealer, each player bids how many tricks they expect to win. You can bid from ${bid.minBid} to ${bid.maxBid}${bid.allowNil ? ', or bid Nil (0)' : ''}. You can’t change a bid.`,
+      'On a Premium host’s table the two partners must bid at least 4 together. One partner can bid 1, 2 or 3 as long as the pair reaches 4, and the second partner to bid can’t go below what is needed. Free Play now games use regular spades bidding with no minimum.',
       `Partners’ bids are added together into one team contract.${bid.allowNil ? ' A Nil bid is separate from the contract.' : ''}`),
     sec('Playing a hand',
       'The player left of the dealer leads. You must follow the suit that was led if you can. If you can’t, play any card, including a spade.',
@@ -988,22 +989,26 @@ function renderStatus(t) {
 // ---------- bid panel and hand ----------
 let lastBidKey = '';
 
-/** Bid limits come from the server config (CONFIG.rules); these are only the fallback before the welcome message. */
-function bidRules() {
-  const r = (state.config && state.config.rules) || {};
-  return { minBid: r.minBid ?? 4, maxBid: r.maxBid ?? 13, allowNil: r.allowNil ?? true };
+/** Bid limits come from the table (and the server config); teamMin is the partners' combined minimum on Premium-hosted tables, 0 otherwise. */
+function bidRules(t) {
+  const r = (t && t.bidRules) || (state.config && state.config.rules) || {};
+  return { minBid: r.minBid ?? 1, maxBid: r.maxBid ?? 13, allowNil: r.allowNil ?? true, teamMin: (t && t.bidRules && t.bidRules.teamMin) ?? 0 };
 }
 
 function bidPanel(t) {
   const partner = t.seats[(t.mySeat + 2) % 4];
   const grid = h('div', { class: 'bidgrid' });
-  const { minBid, maxBid, allowNil } = bidRules();
-  if (allowNil) grid.append(h('button', { class: 'bidbtn nil', type: 'button', text: 'Nil', 'aria-label': 'Bid Nil (zero)', onclick: () => send({ t: 'bid', bid: 0 }) }));
-  for (let n = minBid; n <= maxBid; n++) grid.append(h('button', { class: 'bidbtn', type: 'button', text: String(n), onclick: () => send({ t: 'bid', bid: n }) }));
+  const { minBid, maxBid, allowNil, teamMin } = bidRules(t);
+  const partnerBid = partner.bid !== null && partner.bid !== undefined ? partner.bid : null;
+  const needed = teamMin && partnerBid !== null ? Math.max(0, teamMin - partnerBid) : 0; // lowest bid that still lets the pair reach the team minimum
+  if (allowNil) grid.append(h('button', { class: 'bidbtn nil', type: 'button', text: 'Nil', 'aria-label': 'Bid Nil (zero)', disabled: needed > 0, onclick: () => send({ t: 'bid', bid: 0 }) }));
+  for (let n = minBid; n <= maxBid; n++) grid.append(h('button', { class: 'bidbtn', type: 'button', text: String(n), disabled: n < needed, onclick: () => send({ t: 'bid', bid: n }) }));
+  const teamNote = teamMin ? (needed > 0 ? `Your team must bid at least ${teamMin} together, so bid ${needed} or more` : `Your team must bid at least ${teamMin} together`) : null;
   return h('div', { class: 'bidpanel' },
     h('div', { class: 'bid-title' }, h('b', { text: 'Your bid' }),
-      h('span', { text: partner.bid !== null && partner.bid !== undefined ? `Partner bid ${partner.bid === 0 ? 'Nil' : partner.bid}` : 'Partner has not bid yet' })),
-    grid);
+      h('span', { text: partnerBid !== null ? `Partner bid ${partnerBid === 0 ? 'Nil' : partnerBid}` : 'Partner has not bid yet' })),
+    grid,
+    teamNote ? h('div', { class: 'tiny center-text', text: teamNote }) : null);
 }
 
 /** One long row when every card can be at least ~62px wide, otherwise two rows. Cards never overlap. */

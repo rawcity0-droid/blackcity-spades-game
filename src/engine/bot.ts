@@ -3,7 +3,7 @@
 
 import { Card, rankOf, suitOf } from './cards.js';
 import { CONFIG } from '../config.js';
-import { GameState, beats, legalPlays, partnerOf, teamOf } from './game.js';
+import { GameState, beats, legalBids, legalPlays, partnerOf, teamOf } from './game.js';
 
 const ACE = 12, KING = 11, QUEEN = 10, TEN = 8;
 
@@ -41,9 +41,12 @@ export function chooseBid(g: GameState, seat: number): number {
   const highSpade = spades.some((c) => rankOf(c) >= TEN);
   const highCards = hand.filter((c) => rankOf(c) >= KING).length;
   const partnerBid = g.bids[partnerOf(seat)];
-  if (CONFIG.rules.allowNil && est < 1.1 && spades.length <= 2 && !highSpade && highCards <= 1 && partnerBid !== 0) return 0;
+  if (CONFIG.rules.allowNil && est < 1.1 && spades.length <= 2 && !highSpade && highCards <= 1 && partnerBid !== 0 && legalBids(g, seat).includes(0)) return 0;
 
-  return Math.max(CONFIG.rules.minBid, Math.min(CONFIG.rules.maxBid, Math.round(est)));
+  const want = Math.max(CONFIG.rules.minBid, Math.min(CONFIG.rules.maxBid, Math.round(est)));
+  // Team minimum: if the bid would leave the pair short, bid what is needed (the lowest legal bid at or above the wish)
+  const legal = legalBids(g, seat);
+  return legal.includes(want) ? want : legal.filter((b) => b >= want)[0] ?? legal[legal.length - 1];
 }
 
 /** Tricks the seat's team still needs: combined non-nil bid minus tricks won by non-nil players. */
