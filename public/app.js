@@ -427,7 +427,7 @@ function openPremiumGate(message) {
   const { el, body } = modalCard({ title: 'Premium feature', id: 'gate', cls: 'small' });
   body.append(
     h('p', { class: 'lead', text: message || `Hosting tables, tournaments, and brackets needs Premium ($${price()}/mo).` }),
-    h('p', { class: 'tiny', text: 'Anyone can watch any game and practise against bots. To play with friends, join a Premium host’s game with their code.' }),
+    h('p', { class: 'tiny', text: 'Anyone can watch any game. To play with friends, join a Premium host’s game with their code.' }),
     h('div', { class: 'btn-stack' },
       btn('soft', 'Not now', () => closeModal('gate')),
       btn('soft', 'Restore Premium / I’m the owner', () => { closeModal('gate'); openRestore(); }),
@@ -499,10 +499,9 @@ function renderHome() {
   const root = $('home-layer');
   const game = activeGame(state);
   const summary = game ? returnSummary(state, chat.unread) : '';
-  const sig = [state.practiceTarget, state.subscribed, state.connected, state.config ? price() : '', state.config && state.config.devUnlock, game, summary].join('|');
+  const sig = [state.subscribed, state.connected, state.config ? price() : '', state.config && state.config.devUnlock, game, summary].join('|');
   if (sig === homeSig && root.firstChild) return;
   homeSig = sig;
-  const target = state.practiceTarget;
   const card = h('div', { class: 'home-card' },
     spadeShape('big-spade', 'url(#spadeGrad)'),
     h('div', { class: 'home-top' },
@@ -513,16 +512,11 @@ function renderHome() {
     h('div', { class: 'home-hero' },
       h('div', { class: 'spade-tile' }, spadeShape('', '#2a2a2a')),
       h('h1', { text: 'Spades, built for the table.' })),
-    h('p', { class: 'home-sub', text: `Call your books, protect your partner, and play to ${target}.` }),
+    h('p', { class: 'home-sub', text: 'Call your books, protect your partner, and win the game.' }),
     h('hr', { class: 'gold-rule' }),
-    h('div', { class: 'chips' }, h('span', { text: 'Vs computer' }), h('span', { text: 'Full rules' }), h('span', { text: `First to ${target}` })),
-    h('div', { class: 'practice-row' },
-      h('span', { text: 'Practice match' }),
-      h('div', { class: 'seg dark' },
-        ...[250, 500].map((n) => h('button', { type: 'button', class: n === target ? 'on' : '', text: String(n), onclick: () => { state.practiceTarget = n; store.set(KEY_PRACTICE, String(n)); homeSig = ''; render(); } })))),
+    h('div', { class: 'chips' }, h('span', { text: 'Random players' }), h('span', { text: 'Full rules' }), h('span', { text: 'Bots fill empty seats' })),
     h('div', { class: 'big-btns' },
-      h('button', { class: 'bigbtn gold', type: 'button', onclick: startPractice }, h('span', { text: 'Practice' }), iconArrow()),
-      h('button', { class: 'bigbtn paper', type: 'button', onclick: openPlayModal }, h('span', { text: 'Play Online' }), iconArrowUpRight())),
+      h('button', { class: 'bigbtn gold', type: 'button', onclick: openPlayModal }, h('span', { text: 'Play now' }), iconArrow())),
     h('div', { class: 'prem-row' },
       state.subscribed
         ? h('span', { class: 'pill-gold static', text: 'Premium active' })
@@ -530,12 +524,6 @@ function renderHome() {
     h('div', { class: 'host-row' }, h('button', { class: 'pill-gold', type: 'button', text: 'Host a Tournament', onclick: () => requirePremium(openEventModal) })),
     h('div', { class: 'rules-row' }, link('How to Play / Rules', openRules)));
   root.replaceChildren(card);
-}
-
-function startPractice() {
-  commitName();
-  state.pendingStart = true;
-  send({ t: 'createTable', isPublic: true, target: state.practiceTarget, practice: true }); // practice never needs a name; you sit as 'You' if none is set
 }
 
 // ---------- Play Online modal ----------
@@ -561,7 +549,7 @@ function openPlayModal() {
   const limited = freeLimited();
   const sub = state.subscribed
     ? 'Premium active — host tables, tournaments, and brackets, or join with a code.'
-    : 'Quick play with random players, watch any game, practise against bots, or join a Premium host’s game with their code.';
+    : 'Play now with random players, watch any game, or join a Premium host’s game with their code.';
   const tile = (title, desc, fn) => h('button', { class: 'tile', type: 'button', onclick: () => { if (requireName(nameInput)) fn(); } },
     h('b', { text: title }), h('span', { text: desc }));
   refs.openTables = h('div', { class: 'open-tables' });
@@ -580,9 +568,7 @@ function openPlayModal() {
     limited
       ? h('div', { class: 'tiles' },
         h('button', { class: 'tile wide quick', type: 'button', onclick: () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); } },
-          h('b', { text: 'Quick play: random players (bots fill empty seats)' }), h('span', { text: 'You are matched with whoever else is looking; you cannot pick who. After a few seconds bots fill any empty seats.' })),
-        h('button', { class: 'tile', type: 'button', onclick: () => { closeModal('play'); startPractice(); } },
-          h('b', { text: 'Practice' }), h('span', { text: 'Play against bots on this device.' })),
+          h('b', { text: 'Play now: random players' }), h('span', { text: 'Enter your name and you are matched with random players. If nobody is found in 10 seconds, bots fill the empty seats.' })),
         tile('Watch a game', 'Any table or tournament, by code or from the list below.', () => openCodeModal('watch')),
         h('button', { class: 'tile wide', type: 'button', onclick: () => { if (requireName(nameInput)) openCodeModal('join'); } },
           h('b', { text: 'Join with a code' }), h('span', { text: 'Got an invite from a Premium host? Enter the code to play with friends.' })),
@@ -769,7 +755,7 @@ function openRules() {
     sec('Tournaments',
       `Bracket: single elimination, random seeding. Matches go to ${cfg.tournamentTargetEarly}; the final goes to ${cfg.tournamentTargetFinal}. A team whose players all leave forfeits.`,
       'Tournament (one to eight tables): everyone joins with the host’s code and is seated four to a table; bots fill empty seats. Each table plays one game and the winners are listed.',
-      'Watching is always free, and so is practice against bots. Free players can also use Quick play: you are matched with random players and bots fill any empty seats after a few seconds, but you cannot choose who you play with. To play with friends you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets and choose who plays.'));
+      'Watching is always free. Free players can also tap Play now: you are matched with random players and bots fill any empty seats after 10 seconds, but you cannot choose who you play with. To play with friends you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets and choose who plays.'));
   openModal('rules', el);
 }
 
@@ -893,7 +879,7 @@ function renderTop(t) {
       h('div', { class: 'sbox-bags', text: noBags ? 'no sandbags' : `${bags} bags` }),
       stats ? h('div', { class: 'sbox-stats', text: stats }) : null);
   }));
-  const label = t ? (t.tournament ? t.tournament.label : `First to ${t.target}`) : `First to ${state.practiceTarget}`;
+  const label = t ? (t.tournament ? t.tournament.label : `First to ${t.target}`) : 'First to 250';
   $('target-label').textContent = label;
   const acts = $('top-actions');
   if (!acts.firstChild) {

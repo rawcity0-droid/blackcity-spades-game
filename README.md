@@ -13,7 +13,7 @@ npm install
 npm start                 # http://localhost:3000   (PORT=4000 npm start for another port)
 ```
 
-- Open http://localhost:3000 and press **Practice** (you vs 3 bots, to 250 or 500 as toggled). **Play Online** opens the join / watch / host tiles.
+- Open http://localhost:3000 and press **Play now**. It opens the display name, the **Play now: random players** tile (random players, bots fill empty seats after 10 s) and the join / watch / host tiles.
 - **Several players on one computer:** every tab of the same browser shares one saved player (the reconnect
   token lives in `localStorage`). Open each extra tab with a different slot: `http://localhost:3000/?slot=b`,
   `?slot=c`, ... or use a private/incognito window.
@@ -54,7 +54,7 @@ The server sends the values the UI needs (price, targets) in the `welcome` messa
 
 **The rule (from the owner): anyone can watch any game; free players can play random players (bots fill empty seats) but cannot choose who they play with.
 To pick who you play with you need an invite from a Premium customer.**
-A free user's play is Practice against bots, **Quick play** (random players, see below), or a Premium host's game by code. Premium customers host tables,
+A free user's play is **Play now** (random players with bots filling empty seats, see below), or a Premium host's game by code. Premium customers host tables,
 tournaments and brackets and choose who plays by inviting others with a code.
 
 | | Free | Premium (`SUBSCRIPTION_PRICE_USD_PER_MONTH` = 1.99) |
@@ -80,7 +80,7 @@ free public tables and joining by id). For a free player:
 - **Quick play for free players is a random-match queue** (`CONFIG.freeRandomMatch`, default `true`; `false` = the old solo game against bots).
   The player sees "Finding players…" (`matching {active, waiting, size: 4, remainingMs}`), "N of 4 players found" and a Cancel button
   (`cancelMatch`; Escape and the X also cancel). When **four** free players are queued they start together with no bots. Otherwise, once the oldest
-  waiting player has waited `CONFIG.timing.matchWaitMs` (12 s), everyone queued starts together and **bots fill the empty seats**, with a notice
+  waiting player has waited `CONFIG.timing.matchWaitMs` (10 s), everyone queued starts together and **bots fill the empty seats**, with a notice
   ("Four players found", "2 players found. Bots filled the other seats." or "No other players were looking, so bots joined your table."). One player
   alone gets a practice table as before. A matched table is private and unlisted (nobody picks it from the lobby), and the players are seated in queue order.
   Cancelling, disconnecting or closing the tab leaves the queue; a reload or second tab while queued shows the waiting state again. While queued a
@@ -90,7 +90,7 @@ free public tables and joining by id). For a free player:
 - Watching is unchanged: `watchTable`, `watchCode`, `watchTournament`, and spectators still never receive hands.
 - Premium users and the email restore flow are unchanged.
 
-UI: a free user's **Play Online** modal shows **"Quick play: random players (bots fill empty seats)"** (gold tile), Practice, Watch a game, Join with a code,
+UI: a free user's **Play Online** modal shows **"Play now: random players"** (gold tile), Watch a game, Join with a code,
 and an upgrade card ("Host a table or tournament", Go Premium / Restore Premium). The lobby list is titled "Live games to watch", has **Watch** buttons only (tables and public brackets), and says
 "Ask a Premium host for a table code to play with friends". Premium users keep the full tile set and Join / Watch buttons.
 The "Premium feature" popup appears when a free user tries to host (the home card's Host a Tournament, or an `upgrade_required` reply) and shows the
@@ -281,9 +281,8 @@ Tables, brackets and multi-table tournaments share one code space: **6 character
 
 ## The client
 
-One page, no framework; the felt table is always on screen and everything else is a layer over it: the **home card** (Practice with a
-250 | 500 toggle, Play Online, Go Premium / Restore Premium, Host a Tournament, Rules), the **Play Online** modal (display name, profile
-photo, six tiles for Premium: Join Table, Watch Table, Join Tournament, Create Table, Create Tournament, Create Bracket; free users get Practice, Watch a game, Join with a code and an upgrade card), the **host lobby** modal
+One page, no framework; the felt table is always on screen and everything else is a layer over it: the **home card** (a single Play now button, Go Premium / Restore Premium, Host a Tournament, Rules), the **Play Online** modal (display name, profile
+photo, six tiles for Premium: Join Table, Watch Table, Join Tournament, Create Table, Create Tournament, Create Bracket; free users get Watch a game, Join with a code and an upgrade card), the **host lobby** modal
 (table code, rule chips for target / break rule / sandbags that the host taps to change, four seat cards in two teams, Add Bots,
 Swap partners, Start, enabled only when all 4 seats are filled), the Premium popup, the Restore Premium modal, a Rules modal written from
 the engine's rules (numbers come from the server config), and a menu (Play Online, Rules, Leave table, Restore Premium).

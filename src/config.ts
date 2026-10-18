@@ -85,7 +85,7 @@ export const CONFIG = {
     abandonMs: 60000,       // tournament table: forfeit/fast-forward after this long without humans
     matchEndPauseMs: 7000,  // show the game-over screen before returning to the bracket
     seatHoldMs: 120000,     // a disconnected human's seat can be released to a waiting player after this
-    matchWaitMs: 12000,     // Quick play for a free player: wait this long for other random players, then bots fill the empty seats
+    matchWaitMs: 10000,     // Play now for a free player: wait this long for other random players, then bots fill the empty seats
   },
 } as const;
 

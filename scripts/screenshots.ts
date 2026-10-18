@@ -16,6 +16,14 @@ fs.mkdirSync(TMP, { recursive: true });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Free player: Play now with a name, then wait for bots to fill the table (10 s). */
+async function startSolo(page: Page) {
+  await clickText(page, '.bigbtn', 'Play now');
+  await setName(page, 'Solo');
+  await page.waitForSelector('.tile.quick');
+  await page.evaluate(() => (document.querySelector('.tile.quick') as HTMLElement).click());
+}
+
 async function clickText(page: Page, selector: string, text: string) {
   const ok = await page.evaluate((sel, txt) => {
     const el = [...document.querySelectorAll<HTMLElement>(sel)].find((e) => e.textContent?.trim() === txt);
@@ -108,7 +116,7 @@ async function main() {
     for (const sz of SIZES) {
       page = await newPage(browser, base, sz, sz.tag);
       await shot(page, `ui-${sz.tag}-01-home.png`);
-      await clickText(page, '.bigbtn', 'Practice');
+      await startSolo(page);
       await page.waitForSelector('.bidpanel', { timeout: 30000 });
       await sleep(250);
       const st = await state(page);
@@ -168,7 +176,7 @@ async function main() {
       await cp.close();
     }
     page = await newPage(browser, base, P, 'main');
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await page.waitForSelector('.tiles');
     await page.type('#display-name', 'Avery');
     await page.evaluate(() => (document.querySelector('#display-name') as HTMLElement).blur());
@@ -209,7 +217,7 @@ async function main() {
     await shot(page, 'ui-ph390-09-menu.png');
     await clickText(page, '.menu-item', 'Dev: toggle Premium');
     await page.waitForSelector('.pill-gold.static');
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await page.waitForSelector('.tiles');
     await sleep(200);
     await shot(page, 'ui-ph390-10-play-online-premium-active.png');
@@ -220,7 +228,7 @@ async function main() {
     await shot(page, 'ui-ph390-11-host-lobby-empty.png');
     // second player joins with the code
     const guest = await newPage(browser, base, P, 'gus');
-    await clickText(guest, '.bigbtn', 'Play Online');
+    await clickText(guest, '.bigbtn', 'Play now');
     await guest.waitForSelector('#display-name');
     await guest.type('#display-name', 'Gus');
     await guest.evaluate(() => (document.querySelector('#display-name') as HTMLElement).blur());
@@ -266,7 +274,7 @@ async function main() {
 
     // spectator on a phone, watching that table by its code
     const viewer = await newPage(browser, base, P, 'view');
-    await clickText(viewer, '.bigbtn', 'Play Online');
+    await clickText(viewer, '.bigbtn', 'Play now');
     await setName(viewer, 'Vic');
     await viewer.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Watch')))!.click());
     await viewer.waitForSelector('#code-input');
@@ -344,7 +352,7 @@ async function main() {
 
     // --- bracket (Create Bracket) ---
     page = await newPage(browser, base, P, 'main'); // same token: Premium stays on
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await setName(page, 'Avery'); // a name is required to host
     await page.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Create Bracket')))!.click());
     await page.waitForSelector('.modal.small').catch(async (e) => { await shot(page, 'debug-fail.png'); throw e; });
@@ -377,7 +385,7 @@ async function main() {
     // --- Create Tournament (one to eight tables) ---
     page = await newPage(browser, base, P, 'main');
     await page.evaluate(() => { window.confirm = () => true; });
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await setName(page, 'Avery'); // a name is required to host
     await page.keyboard.press('Escape');
     await sleep(150);
@@ -389,7 +397,7 @@ async function main() {
     await page.waitForSelector('.sheet .codebox');
     const ecode = await page.$eval('.cb-code', (e) => e.textContent!);
     const ej = await newPage(browser, base, P, 'ej');
-    await clickText(ej, '.bigbtn', 'Play Online');
+    await clickText(ej, '.bigbtn', 'Play now');
     await setName(ej, 'Eve');
     await ej.evaluate(() => ([...document.querySelectorAll<HTMLElement>('.tile')].find((e) => e.textContent!.startsWith('Join')))!.click());
     await ej.waitForSelector('#code-input');
@@ -428,11 +436,11 @@ async function main() {
 
     // --- free user Quick play: random players, "Finding players…", cancel, then two free players are matched with bots in the other seats ---
     page = await newPage(browser, base, P, 'fq');
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await setName(page, 'Frankie');
     await page.waitForSelector('.tile.quick');
     const quickText = await page.$eval('.tile.quick', (e) => e.textContent);
-    if (!/Quick play: random players \(bots fill empty seats\)/.test(quickText ?? '')) throw new Error('quick play tile text: ' + quickText);
+    if (!/Play now: random players/.test(quickText ?? '')) throw new Error('quick play tile text: ' + quickText);
     const freeTiles = await page.evaluate(() => [...document.querySelectorAll('.tiles .tile')].map((e) => e.querySelector('b')!.textContent));
     console.log('free Play Online tiles:', JSON.stringify(freeTiles));
     if (freeTiles.some((t) => /Create|Host a/.test(t ?? '') && !/Host a table or tournament/.test(t ?? ''))) throw new Error('free players must not see create tiles: ' + freeTiles);
@@ -450,10 +458,10 @@ async function main() {
     if (!(await page.$('.home-card'))) throw new Error('cancel should leave you on the home screen');
     // two free players: matched together, bots fill the other two seats after the wait
     const fq2 = await newPage(browser, base, P, 'fq2');
-    await clickText(fq2, '.bigbtn', 'Play Online');
+    await clickText(fq2, '.bigbtn', 'Play now');
     await setName(fq2, 'Gabe');
     await clickText(fq2, '.tile.quick', quickText!);
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await page.waitForSelector('.tile.quick');
     await clickText(page, '.tile.quick', quickText!);
     await page.waitForSelector('.bidpanel, .hand .cbtn', { timeout: 30000 });
@@ -467,7 +475,7 @@ async function main() {
 
     // --- display name: a brand-new visitor sees an empty field; joining without a name is blocked ---
     page = await newPage(browser, base, P, 'newbie');
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await page.waitForSelector('#display-name');
     const prefilled = await page.$eval('#display-name', (e) => (e as HTMLInputElement).value);
     const placeholder = await page.$eval('#display-name', (e) => (e as HTMLInputElement).placeholder);
@@ -487,7 +495,7 @@ async function main() {
     const prod = await startServer({ port: 0, host: '127.0.0.1', ownerEmails: ['owner@example.test'], timings: { botDelayMs: 650, trickPauseMs: 1500, handPauseMs: 60000, matchEndPauseMs: 30000 } });
     const pbase = `http://127.0.0.1:${prod.port}`;
     page = await newPage(browser, pbase, P, 'rs');
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await setName(page, 'Avery');
     await page.keyboard.press('Escape');
     await sleep(150);
@@ -504,7 +512,7 @@ async function main() {
     await page.type('#restore-email', ' Owner@Example.test ');
     await clickText(page, '.modal.small .btn', 'Restore Premium');
     await page.waitForFunction(() => !document.querySelector('#restore-email'));
-    await clickText(page, '.bigbtn', 'Play Online'); // the host tiles are unlocked now
+    await clickText(page, '.bigbtn', 'Play now'); // the host tiles are unlocked now
     await page.waitForFunction(() => /Premium active/.test(document.querySelector('.modal .lead')?.textContent ?? '') && !!document.querySelector('.tiles'));
     await sleep(500);
     await shot(page, 'ui-ph390-restore-success.png');
@@ -551,7 +559,7 @@ async function main() {
     await premiumHost('Marlo', { t: 'createTable', isPublic: true, target: 250 });
     await premiumHost('Dina', { t: 'createTournament', size: 8, isPublic: true });
     page = await newPage(browser, base, P, 'freeuser');
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await page.waitForSelector('.tile.upgrade');
     await page.waitForFunction(() => document.querySelectorAll('.open-tables .list-item').length === 2);
     await sleep(300);
@@ -575,12 +583,12 @@ async function main() {
     const D = { width: 1280, height: 800, mobile: false };
     page = await newPage(browser, base, D, 'dsk', 1);
     await shot(page, 'ui-desktop-01-home.png');
-    await clickText(page, '.bigbtn', 'Play Online');
+    await clickText(page, '.bigbtn', 'Play now');
     await page.waitForSelector('.tiles');
     await sleep(200);
     await shot(page, 'ui-desktop-02-play-online.png');
     await page.keyboard.press('Escape');
-    await clickText(page, '.bigbtn', 'Practice');
+    await startSolo(page);
     await page.waitForSelector('.bidpanel', { timeout: 30000 });
     await clickText(page, '.bidbtn', '4');
     for (let i = 0; i < 30; i++) {
