@@ -49,6 +49,7 @@ test('two free players are matched together; bots take the other two seats', asy
     assert.equal(humans(ta), 2);
     assert.equal(ta.seats.filter((s: any) => s.kind === 'bot').length, 2);
     assert.equal(ta.practice, false);
+    assert.equal(ta.target, 500, 'free Play now games go to 500');
     assert.equal(ta.isPublic, false, 'unlisted: nobody else can pick this table from the lobby');
     assert.match((await a.waitFor((m) => m.t === 'notice' && m.kind === 'match', 8000, true)).message, /2 players found/);
     assert.notEqual(ta.mySeat, tb.mySeat);

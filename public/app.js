@@ -880,7 +880,7 @@ function renderTop(t) {
       h('div', { class: 'sbox-bags', text: noBags ? 'no sandbags' : `${bags} bags` }),
       stats ? h('div', { class: 'sbox-stats', text: stats }) : null);
   }));
-  const label = t ? (t.tournament ? t.tournament.label : `First to ${t.target}`) : 'First to 250';
+  const label = t ? (t.tournament ? t.tournament.label : `First to ${t.target}`) : 'First to 500';
   $('target-label').textContent = label;
   const acts = $('top-actions');
   if (!acts.firstChild) {

@@ -46,6 +46,7 @@ export const CONFIG = {
   defaultTarget: 500,
   tableTargets: [250, 500],
   quickPlayTarget: 250,
+  freeMatchTarget: 500, // free "Play now" (random match) games play to this
   tournamentSizes: [4, 8, 16],
   eventTableOptions: [1, 2, 3, 4, 5, 6, 7, 8], // "Create Tournament": a multi-table event of one to eight tables
   eventTarget: 250,      // each event table plays one game to this score

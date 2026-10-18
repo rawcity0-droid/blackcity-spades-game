@@ -227,6 +227,7 @@ export class Hub {
         tournamentTargetEarly: CONFIG.tournamentTargetEarly,
         tournamentTargetFinal: CONFIG.tournamentTargetFinal,
         quickPlayTarget: CONFIG.quickPlayTarget,
+        freeMatchTarget: CONFIG.freeMatchTarget,
         defaultTarget: CONFIG.defaultTarget,
         eventTableOptions: CONFIG.eventTableOptions,
         eventTarget: CONFIG.eventTarget,
@@ -565,7 +566,7 @@ export class Hub {
     const people = ids.map((id) => this.players.get(id)!);
     if (this.tables.size >= CONFIG.limits.maxTables) { for (const p of people) { this.send(p.id, { t: 'matching', active: false }); this.err(p, 'too_many', 'The server is busy. Try again soon'); } return; }
     const solo = people.length === 1;
-    const table = this.makeTable({ isPublic: false, target: CONFIG.quickPlayTarget, hostId: people[0].id, practice: solo, quick: true });
+    const table = this.makeTable({ isPublic: false, target: CONFIG.freeMatchTarget, hostId: people[0].id, practice: solo, quick: true });
     people.forEach((p, i) => { this.leaveCurrent(p); table.seatHuman(i, p.id, p.nick, true); p.tableId = table.id; });
     const bots = 4 - people.length;
     const message = bots === 0 ? 'Four players found. Good luck!'
