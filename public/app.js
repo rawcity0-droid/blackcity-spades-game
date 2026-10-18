@@ -514,7 +514,7 @@ function renderHome() {
       h('h1', { text: 'Spades, built for the table.' })),
     h('p', { class: 'home-sub', text: 'Call your books, protect your partner, and win the game.' }),
     h('hr', { class: 'gold-rule' }),
-    h('div', { class: 'chips' }, h('span', { text: 'Random players' }), h('span', { text: 'Full rules' }), h('span', { text: 'Bots fill empty seats' })),
+    h('div', { class: 'chips' }, h('span', { text: 'Random players' }), h('span', { text: 'Full rules' }), h('span', { text: 'Fast matching' })),
     h('div', { class: 'big-btns' },
       h('button', { class: 'bigbtn gold', type: 'button', onclick: openPlayModal }, h('span', { text: 'Play now' }), iconArrow())),
     h('div', { class: 'prem-row' },
@@ -568,7 +568,7 @@ function openPlayModal() {
     limited
       ? h('div', { class: 'tiles' },
         h('button', { class: 'tile wide quick', type: 'button', onclick: () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); } },
-          h('b', { text: 'Play now: random players' }), h('span', { text: 'Enter your name and you are matched with random players. If nobody is found in 10 seconds, bots fill the empty seats.' })),
+          h('b', { text: 'Play now: random players' }), h('span', { text: 'Enter your name and you are matched with random players.' })),
         tile('Watch a game', 'Any table or tournament, by code or from the list below.', () => openCodeModal('watch')),
         h('button', { class: 'tile wide', type: 'button', onclick: () => { if (requireName(nameInput)) openCodeModal('join'); } },
           h('b', { text: 'Join with a code' }), h('span', { text: 'Got an invite from a Premium host? Enter the code to play with friends.' })),
@@ -718,11 +718,8 @@ function openMatchingModal() {
 function renderMatching() {
   const m = state.matching;
   if (!m || !matchRefs.count) return;
-  matchRefs.count.textContent = `${m.waiting} of ${m.size} players found`;
-  const secs = Math.ceil(Math.max(0, m.until - Date.now()) / 1000);
-  matchRefs.note.textContent = secs > 0
-    ? `Matching you with random players. If no one else joins, bots fill the empty seats in ${secs}s.`
-    : 'Starting your game with bots in the empty seats…';
+  matchRefs.count.textContent = 'Matching you with random players…';
+  matchRefs.note.textContent = 'Hang tight, your table will be ready in a moment.';
 }
 
 // ---------- rules ----------
@@ -756,7 +753,7 @@ function openRules() {
     sec('Tournaments',
       `Bracket: single elimination, random seeding. Matches go to ${cfg.tournamentTargetEarly}; the final goes to ${cfg.tournamentTargetFinal}. A team whose players all leave forfeits.`,
       'Tournament (one to eight tables): everyone joins with the host’s code and is seated four to a table; bots fill empty seats. Each table plays one game and the winners are listed.',
-      'Watching is always free. Free players can also tap Play now: you are matched with random players and bots fill any empty seats after 10 seconds, but you cannot choose who you play with. To play with friends you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets and choose who plays.'));
+      'Watching is always free. Free players can also tap Play now: you are matched with random players and seated at a table, but you cannot choose who you play with. To play with friends you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets and choose who plays.'));
   openModal('rules', el);
 }
 

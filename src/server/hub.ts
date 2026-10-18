@@ -568,11 +568,8 @@ export class Hub {
     const solo = people.length === 1;
     const table = this.makeTable({ isPublic: false, target: CONFIG.freeMatchTarget, hostId: people[0].id, practice: solo, quick: true });
     people.forEach((p, i) => { this.leaveCurrent(p); table.seatHuman(i, p.id, p.nick, true); p.tableId = table.id; });
-    const bots = 4 - people.length;
-    const message = bots === 0 ? 'Four players found. Good luck!'
-      : solo ? 'No other players were looking, so bots joined your table.'
-        : `${people.length} players found. Bots filled the other ${bots === 1 ? 'seat' : 'seats'}.`;
-    for (const p of people) { this.send(p.id, { t: 'matching', active: false }); this.send(p.id, { t: 'notice', kind: 'match', message }); }
+    // No notice about who was found: the table just appears with everyone's names.
+    for (const p of people) this.send(p.id, { t: 'matching', active: false });
     table.startGame();
     this.markLobbyDirty();
   }

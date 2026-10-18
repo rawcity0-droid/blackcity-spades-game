@@ -78,10 +78,10 @@ free public tables and joining by id). For a free player:
   made by a Premium host...". A watcher's "Take a seat" is a `joinCode` too, so the same rule applies.
 - A Practice table (`createTable {practice: true}`) is `practice: true` in the table view, never public or listed, and joining it by code is refused.
 - **Quick play for free players is a random-match queue** (`CONFIG.freeRandomMatch`, default `true`; `false` = the old solo game against bots).
-  The player sees "Finding players…" (`matching {active, waiting, size: 4, remainingMs}`), "N of 4 players found" and a Cancel button
+  The player sees "Finding players…" (`matching {active, waiting, size: 4, remainingMs}`), a neutral "Matching you with random players…" message (no count, no mention of bots) and a Cancel button
   (`cancelMatch`; Escape and the X also cancel). When **four** free players are queued they start together with no bots. Otherwise, once the oldest
-  waiting player has waited `CONFIG.timing.matchWaitMs` (10 s), everyone queued starts together and **bots fill the empty seats**, with a notice
-  ("Four players found", "2 players found. Bots filled the other seats." or "No other players were looking, so bots joined your table."). One player
+  waiting player has waited `CONFIG.timing.matchWaitMs` (10 s), everyone queued starts together and **bots fill the empty seats**, with no
+  notice at all: the table just appears with everyone's names. Bot names come from a large pool of street-style nicknames in `BOT_NAMES` (`src/server/table.ts`). One player
   alone gets a practice table as before. A matched table is private and unlisted (nobody picks it from the lobby), and the players are seated in queue order.
   Cancelling, disconnecting or closing the tab leaves the queue; a reload or second tab while queued shows the waiting state again. While queued a
   player cannot create, join or watch tables (`busy`: "You are finding players. Cancel that first"); pressing Quick play again just re-shows the wait.

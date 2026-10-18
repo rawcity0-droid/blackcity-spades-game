@@ -55,7 +55,22 @@ export interface TableInit {
 type Result<T = object> = ({ ok: true } & T) | { ok: false; code: string; message: string };
 const fail = (code: string, message: string) => ({ ok: false as const, code, message });
 
-const BOT_NAMES = ['Ace', 'Duke', 'Queenie', 'Jax', 'Maverick', 'Sage', 'Rook', 'Dottie', 'Blaze', 'Nova', 'Pip', 'Otis'];
+const BOT_NAMES = [
+  'Ace', 'Duke', 'Queenie', 'Jax', 'Maverick', 'Sage', 'Rook', 'Dottie',
+  'Blaze', 'Nova', 'Pip', 'Otis', 'Big Mike', 'Lil Tone', 'Peanut', 'Smoke',
+  'Tank', 'Slim', 'Cash', 'Dre', 'Showtime', 'Ghost', 'Bishop', 'Truck',
+  'Mookie', 'Boogie', 'Pooh', 'Scoop', 'Juice', 'Fats', 'Money Mal', 'Cookie',
+  'Shorty', 'Tito', 'Sticks', 'Rico', 'Deuce', 'Squeaky', 'Biscuit', 'Gizmo',
+  'Rell', 'Tay', 'Nene', 'Keke', 'Mama Jo', 'Miss Pearl', 'Auntie Em', 'Big Cuz',
+  'Low', 'Zeke', 'Flip', 'Hustle', 'Pockets', 'Dollar', 'Big Hen', 'Lucky',
+  'Spade Dad', 'Sweets', 'Cheeks', 'Bam', 'Hollis', 'Crenshaw', 'Flatbush', 'Lenox',
+  'Broad St', 'Southside', 'Eastside', 'Westside', 'Northside', 'The Block', '5th Ward', 'Uptown',
+  'Eastwick', 'Lakeview', 'Rosedale', 'Parkway', 'Marcy', 'Fulton', 'Jefferson', 'Division',
+  'Atlas', 'Domino', 'Dap', 'Loc', 'Gunner', 'Sarge', 'Moe', 'Chilly',
+  'Pinky', 'Wavy', 'Kilo', 'Big Sis', 'Lil Ray', 'Mook', 'CJ', 'June',
+  'Boots', 'Rocco', 'Tre', 'Cap', 'Rude Boy', 'OG Ray', 'Tea', 'Ride',
+  'Cuz', 'Pop', 'Nikki B',
+];
 
 export interface ChatLine { from: string; role: 'player' | 'watcher'; text: string; ts: number; by: string }
 

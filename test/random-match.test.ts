@@ -22,12 +22,13 @@ test('a lone free player sees Finding players, then bots fill the table after th
     assert.ok(q.remainingMs > 0 && q.remainingMs <= 300);
     assert.equal(queued(srv), 1);
     assert.equal(c.log.some((m) => m.t === 'table'), false, 'no table while waiting');
-    const notice = await c.waitFor((m) => m.t === 'notice' && m.kind === 'match');
-    assert.match(notice.message, /bots joined your table/);
     const t = await c.waitFor((m) => m.t === 'table' && m.phase !== undefined, 8000, true);
     assert.equal(humans(t), 1);
     assert.equal(t.seats.filter((s: any) => s.kind === 'bot').length, 3);
     assert.equal(c.last.matching.active, false);
+    assert.equal(c.log.some((m) => m.t === 'notice' && m.kind === 'match'), false, 'no "bots joined" notice: it stays a mystery');
+    const botNames = t.seats.filter((s: any) => s.kind === 'bot').map((s: any) => s.name);
+    assert.equal(new Set(botNames).size, 3, 'bot names are unique at the table');
     assert.equal(queued(srv), 0);
     assert.equal(srv.hub['matchTimer'], null);
   } finally { await srv.close(); }
@@ -51,7 +52,7 @@ test('two free players are matched together; bots take the other two seats', asy
     assert.equal(ta.practice, false);
     assert.equal(ta.target, 500, 'free Play now games go to 500');
     assert.equal(ta.isPublic, false, 'unlisted: nobody else can pick this table from the lobby');
-    assert.match((await a.waitFor((m) => m.t === 'notice' && m.kind === 'match', 8000, true)).message, /2 players found/);
+    assert.equal(a.log.some((m) => m.t === 'notice' && m.kind === 'match'), false);
     assert.notEqual(ta.mySeat, tb.mySeat);
     assert.equal((srv.hub.lobbyMessage() as any).tables.length, 0);
   } finally { await srv.close(); }
@@ -66,7 +67,6 @@ test('four queued free players start at once with no bots, and the queue is empt
     const tables = await Promise.all(cs.map((c) => c.waitFor((m) => m.t === 'table', 5000, true)));
     assert.equal(new Set(tables.map((t) => t.id)).size, 1);
     assert.equal(humans(tables[0]), 4);
-    assert.match((await cs[0].waitFor((m) => m.t === 'notice' && m.kind === 'match', 5000, true)).message, /Four players found/);
     assert.equal(queued(srv), 0);
     assert.equal(srv.hub['matchTimer'], null, 'the wait timer is cleared');
   } finally { await srv.close(); }
