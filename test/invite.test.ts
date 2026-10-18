@@ -57,7 +57,7 @@ test('free users can practice against bots; a practice table is solo, unlisted a
   } finally { await srv.close(); }
 });
 
-test('quickPlay for a free user is a solo practice game against bots, never a match with other humans', async () => {
+test('quickPlay for a lone free user ends up in a practice game against bots, and never at a Premium host\'s table', async () => {
   const srv = await testServer({ devUnlock: true });
   try {
     const host = await premiumTable(srv, 'Host'); // a public table with open seats

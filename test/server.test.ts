@@ -196,7 +196,7 @@ test('spectators: watch by code (private table), never receive hands, cannot act
     assert.equal(counted.spectators, 1);
 
     // every action from a spectator is rejected
-    for (const msg of [{ t: 'bid', bid: 3 }, { t: 'play', card: 'AS' }, { t: 'ready' }, { t: 'startTable' }, { t: 'rematch' }]) {
+    for (const msg of [{ t: 'bid', bid: 4 }, { t: 'play', card: 'AS' }, { t: 'ready' }, { t: 'startTable' }, { t: 'rematch' }]) {
       spec.send(msg);
       const e = await spec.waitFor((m) => m.t === 'error', 2000);
       assert.equal(e.code, 'not_seated', JSON.stringify(msg));

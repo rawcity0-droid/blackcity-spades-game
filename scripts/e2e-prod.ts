@@ -60,7 +60,7 @@ async function main() {
       if (m.t !== 'table' || m.spectator || m.handNo !== 1) return;
       const key = `${m.handNo}:${m.hand.length}:${m.canBid}:${m.trick?.length ?? 0}`;
       if (key === acted) return;
-      if (m.canBid) { acted = key; bids++; setTimeout(() => n1.send({ t: 'bid', bid: 3 }), 40); }
+      if (m.canBid) { acted = key; bids++; setTimeout(() => n1.send({ t: 'bid', bid: 4 }), 40); }
       else if (m.legal?.length) { acted = key; plays++; setTimeout(() => n1.send({ t: 'play', card: m.legal[0] }), 40); }
     });
     const after = await n1.wait((m) => m.t === 'table' && (m.phase === 'handOver' || m.handNo >= 2), 60000);

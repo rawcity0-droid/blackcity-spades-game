@@ -17,6 +17,7 @@ export type ClientMsg =
   | { t: 'joinCode'; code: string }
   | { t: 'watchCode'; code: string }
   | { t: 'quickPlay' }
+  | { t: 'cancelMatch' }
   | { t: 'startTable' }
   | { t: 'bid'; bid: number }
   | { t: 'play'; card: string }
@@ -79,7 +80,7 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (o.token !== undefined && !(str(o.token) && TOKEN_RE.test(o.token))) return bad('Bad token');
       // An empty nick means "no name": a returning player keeps their saved name, a new one has none (no default is ever assigned)
       return { msg: { t: 'hello', nick: sanitizeNick(o.nick), token: o.token as string | undefined } };
-    case 'ping': case 'quickPlay': case 'startTable': case 'ready': case 'rematch': case 'leaveTable':
+    case 'ping': case 'quickPlay': case 'cancelMatch': case 'startTable': case 'ready': case 'rematch': case 'leaveTable':
     case 'startTournament': case 'leaveTournament': case 'devToggleSubscription':
     case 'addBots': case 'swapPartners': case 'startEvent': case 'leaveEvent': case 'goPremium':
       return { msg: { t: o.t } as ClientMsg };

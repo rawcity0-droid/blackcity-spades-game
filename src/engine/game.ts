@@ -112,14 +112,20 @@ export function nextHand(g: GameState): void {
 
 // ---------- bidding ----------
 
+/** Bids a player may make: minBid..maxBid (CONFIG.rules), plus 0 = Nil when CONFIG.rules.allowNil. */
 export function legalBids(): number[] {
-  return Array.from({ length: 14 }, (_, i) => i); // 0 = nil, 1..13
+  const { minBid, maxBid, allowNil } = CONFIG.rules;
+  const bids = Array.from({ length: maxBid - minBid + 1 }, (_, i) => minBid + i);
+  return allowNil ? [0, ...bids] : bids;
 }
 
 export function placeBid(g: GameState, seat: number, bid: number): void {
   if (g.phase !== 'bidding') throw new EngineError('Not bidding');
   if (seat !== g.turn) throw new EngineError('Not your turn');
-  if (!Number.isInteger(bid) || bid < 0 || bid > 13) throw new EngineError('Bid must be 0-13');
+  if (!legalBids().includes(bid)) {
+    const { minBid, maxBid, allowNil } = CONFIG.rules;
+    throw new EngineError(`Bid must be ${minBid} to ${maxBid}${allowNil ? ' (or Nil)' : ''}`);
+  }
   g.bids[seat] = bid;
   if (g.bids.every((b) => b !== null)) {
     g.phase = 'playing';

@@ -88,7 +88,7 @@ const state = (page: Page) => page.evaluate(() => ({
 }));
 
 async function main() {
-  const srv = await startServer({ port: 0, host: '127.0.0.1', devUnlock: true, timings: { botDelayMs: 650, trickPauseMs: 1500, handPauseMs: 60000, matchEndPauseMs: 30000 } });
+  const srv = await startServer({ port: 0, host: '127.0.0.1', devUnlock: true, timings: { botDelayMs: 650, trickPauseMs: 1500, handPauseMs: 60000, matchEndPauseMs: 30000, matchWaitMs: 4000 } });
   const base = `http://127.0.0.1:${srv.port}`;
   const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox', '--disable-gpu'] });
   const shot = async (page: Page, name: string, full = false) => { await page.bringToFront(); await page.screenshot({ path: OUT + name, fullPage: full }); console.log('saved', name); };
@@ -114,6 +114,10 @@ async function main() {
       const st = await state(page);
       if (st.cards !== 13) throw new Error(`${sz.tag}: expected 13 cards, saw ${st.cards}`);
       await shot(page, `ui-${sz.tag}-02-bidding-13cards.png`);
+      const bidLabels = await page.evaluate(() => [...document.querySelectorAll('.bidbtn')].map((b) => b.textContent));
+      console.log(sz.tag, 'bid buttons:', bidLabels.join(' '));
+      if (bidLabels.join(',') !== 'Nil,4,5,6,7,8,9,10,11,12,13') throw new Error('bid choices should start at 4 (plus Nil): ' + bidLabels.join(','));
+      if (sz.tag === 'ph390') await shot(page, 'ui-ph390-bid-min4.png');
       await chatFits(page, sz.tag + ' bidding');
       await shot(page, `ui-${sz.tag}-chat-open-bidding.png`);
       await page.evaluate(() => (document.querySelector('.chat-x') as HTMLElement).click());
@@ -422,6 +426,44 @@ async function main() {
     await shot(page, 'ui-ph390-24-host-tournament-gate.png');
     await page.close();
 
+    // --- free user Quick play: random players, "Finding players…", cancel, then two free players are matched with bots in the other seats ---
+    page = await newPage(browser, base, P, 'fq');
+    await clickText(page, '.bigbtn', 'Play Online');
+    await setName(page, 'Frankie');
+    await page.waitForSelector('.tile.quick');
+    const quickText = await page.$eval('.tile.quick', (e) => e.textContent);
+    if (!/Quick play: random players \(bots fill empty seats\)/.test(quickText ?? '')) throw new Error('quick play tile text: ' + quickText);
+    const freeTiles = await page.evaluate(() => [...document.querySelectorAll('.tiles .tile')].map((e) => e.querySelector('b')!.textContent));
+    console.log('free Play Online tiles:', JSON.stringify(freeTiles));
+    if (freeTiles.some((t) => /Create|Host a/.test(t ?? '') && !/Host a table or tournament/.test(t ?? ''))) throw new Error('free players must not see create tiles: ' + freeTiles);
+    await sleep(250);
+    await shot(page, 'ui-ph390-free-quickplay-modal.png');
+    await clickText(page, '.tile.quick', quickText!);
+    await page.waitForSelector('.finding-ring');
+    await sleep(300);
+    const finding = await page.evaluate(() => ({ title: document.querySelector('.modal-title')?.textContent, count: document.querySelector('.finding-count')?.textContent, note: document.querySelector('.finding-note')?.textContent, cancel: !![...document.querySelectorAll('.btn')].find((b) => b.textContent === 'Cancel') }));
+    console.log('finding players:', JSON.stringify(finding));
+    if (!/Finding players/.test(finding.title ?? '') || !/^1 of 4 players found/.test(finding.count ?? '') || !finding.cancel) throw new Error('Finding players state: ' + JSON.stringify(finding));
+    await shot(page, 'ui-ph390-free-quickplay-finding.png');
+    await clickText(page, '.btn', 'Cancel');
+    await page.waitForFunction(() => !document.querySelector('.finding-ring'));
+    if (!(await page.$('.home-card'))) throw new Error('cancel should leave you on the home screen');
+    // two free players: matched together, bots fill the other two seats after the wait
+    const fq2 = await newPage(browser, base, P, 'fq2');
+    await clickText(fq2, '.bigbtn', 'Play Online');
+    await setName(fq2, 'Gabe');
+    await clickText(fq2, '.tile.quick', quickText!);
+    await clickText(page, '.bigbtn', 'Play Online');
+    await page.waitForSelector('.tile.quick');
+    await clickText(page, '.tile.quick', quickText!);
+    await page.waitForSelector('.bidpanel, .hand .cbtn', { timeout: 30000 });
+    await fq2.waitForSelector('.bidpanel, .hand .cbtn', { timeout: 30000 });
+    const withGabe = await page.evaluate(() => document.body.innerText.includes('Gabe'));
+    console.log('Frankie sees Gabe at the table:', withGabe);
+    if (!withGabe) throw new Error('Frankie should be seated with Gabe');
+    await fq2.close();
+    await page.close();
+
 
     // --- display name: a brand-new visitor sees an empty field; joining without a name is blocked ---
     page = await newPage(browser, base, P, 'newbie');
@@ -540,7 +582,7 @@ async function main() {
     await page.keyboard.press('Escape');
     await clickText(page, '.bigbtn', 'Practice');
     await page.waitForSelector('.bidpanel', { timeout: 30000 });
-    await clickText(page, '.bidbtn', '3');
+    await clickText(page, '.bidbtn', '4');
     for (let i = 0; i < 30; i++) {
       const s = await state(page);
       if (s.tc >= 2 && s.legal > 0) break;

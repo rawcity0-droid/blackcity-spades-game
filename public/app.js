@@ -68,6 +68,7 @@ function savedNick() {
 
 // ---------- state ----------
 const state = {
+  matching: null, // Quick play queue for free players: {waiting, size, until, waitMs}
   nick: savedNick(),
   token: store.get(KEY_TOKEN) || '',
   avatar: session.get(KEY_AVATAR) || '', // profile photo: local only, never sent to the server
@@ -148,6 +149,7 @@ function handle(m) {
   switch (m.t) {
     case 'welcome':
       state.token = m.token;
+      setMatching(null); // the server re-sends the waiting state right after this if we are still queued
       store.set(KEY_TOKEN, m.token);
       state.config = m.config;
       state.subscribed = m.subscribed;
@@ -155,6 +157,7 @@ function handle(m) {
       handlePremiumReturn();
       if (urlCode && !urlCodeUsed && !state.table) { urlCodeUsed = true; openCodeModal('join', urlCode); } // ?code=ABC234 opens the join box
       break;
+    case 'matching': setMatching(m.active ? m : null); return;
     case 'nick': state.nick = m.nick; return;
     case 'lobby': state.lobby = m; fillOpenTables(); return;
     case 'notice': toast(m.message, 5500); return;
@@ -173,7 +176,8 @@ function handle(m) {
       break;
     }
     case 'table': {
-      hideCover(); // resuming a seat goes straight to the game
+      hideCover();
+      if (state.matching) setMatching(null); // found players (or bots joined): the table replaces the waiting box // resuming a seat goes straight to the game
       const isNew = !state.table || state.table.id !== m.id;
       state.table = m;
       if (isNew) { closeAllModals(); chatReset(); }
@@ -265,7 +269,7 @@ function closeModal(id) {
 function closeAllModals() { for (const id of [...modals.keys()]) closeModal(id); }
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (modals.size) closeModal([...modals.keys()].pop());
+  if (modals.size) { const top = [...modals.keys()].pop(); if (top === 'matching') cancelMatch(); else closeModal(top); }
   else if (chat.open) closeChat();
 });
 
@@ -557,7 +561,7 @@ function openPlayModal() {
   const limited = freeLimited();
   const sub = state.subscribed
     ? 'Premium active — host tables, tournaments, and brackets, or join with a code.'
-    : 'Watch any game, practise against bots, or join a Premium host’s game with their code.';
+    : 'Quick play with random players, watch any game, practise against bots, or join a Premium host’s game with their code.';
   const tile = (title, desc, fn) => h('button', { class: 'tile', type: 'button', onclick: () => { if (requireName(nameInput)) fn(); } },
     h('b', { text: title }), h('span', { text: desc }));
   refs.openTables = h('div', { class: 'open-tables' });
@@ -575,6 +579,8 @@ function openPlayModal() {
       h('button', { class: 'pill-gold', type: 'button', text: premiumLabel(), onclick: goPremium }), link('Restore Premium', openRestore))]),
     limited
       ? h('div', { class: 'tiles' },
+        h('button', { class: 'tile wide quick', type: 'button', onclick: () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); } },
+          h('b', { text: 'Quick play: random players (bots fill empty seats)' }), h('span', { text: 'You are matched with whoever else is looking; you cannot pick who. After a few seconds bots fill any empty seats.' })),
         h('button', { class: 'tile', type: 'button', onclick: () => { closeModal('play'); startPractice(); } },
           h('b', { text: 'Practice' }), h('span', { text: 'Play against bots on this device.' })),
         tile('Watch a game', 'Any table or tournament, by code or from the list below.', () => openCodeModal('watch')),
@@ -582,7 +588,7 @@ function openPlayModal() {
           h('b', { text: 'Join with a code' }), h('span', { text: 'Got an invite from a Premium host? Enter the code to play with friends.' })),
         h('div', { class: 'tile upgrade' },
           h('b', { text: 'Host a table or tournament' }),
-          h('span', { text: 'Premium hosts create tables, tournaments, and brackets and invite friends with a code.' }),
+          h('span', { text: 'Premium hosts create tables, tournaments, and brackets, and choose who plays by inviting friends with a code.' }),
           h('div', { class: 'prem-row light' },
             h('button', { class: 'pill-gold', type: 'button', text: premiumLabel(), onclick: goPremium }), link('Restore Premium', openRestore))))
       : h('div', { class: 'tiles' },
@@ -592,7 +598,7 @@ function openPlayModal() {
         tile('Create Table', 'Premium host: make a private code and choose the rules.', () => requirePremium(createTable)),
         tile('Create Tournament', 'Premium host: run one to eight tables.', () => requirePremium(openEventModal)),
         tile('Create Bracket', 'Premium host: run a winner-advances bracket.', () => requirePremium(openBracketModal))),
-    h('div', { class: 'quick-row' }, link(limited ? 'Quick game against bots' : 'Quick play at a public table', () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); })),
+    limited ? null : h('div', { class: 'quick-row' }, link('Quick play at a public table', () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); })),
     refs.openTables);
   openModal('play', el);
   fillOpenTables();
@@ -692,12 +698,54 @@ function openBracketModal() {
   openModal('bracket', el);
 }
 
+// ---------- Quick play queue (free players): "Finding players…" ----------
+let matchTick = 0;
+const matchRefs = {};
+function setMatching(m) {
+  state.matching = m ? { waiting: m.waiting, size: m.size || 4, until: Date.now() + (m.remainingMs || 0), waitMs: m.waitMs || 0 } : null;
+  if (!state.matching) {
+    clearInterval(matchTick);
+    matchTick = 0;
+    closeModal('matching');
+    return;
+  }
+  closeModal('play');
+  if (!modalOpen('matching')) openMatchingModal();
+  renderMatching();
+  if (!matchTick) matchTick = setInterval(renderMatching, 500);
+}
+function cancelMatch() {
+  send({ t: 'cancelMatch' });
+  setMatching(null);
+}
+function openMatchingModal() {
+  const { el, body } = modalCard({ title: 'Finding players…', id: 'matching', cls: 'small', onClose: cancelMatch });
+  matchRefs.count = h('p', { class: 'finding-count', role: 'status' });
+  matchRefs.note = h('p', { class: 'tiny finding-note' });
+  body.append(
+    h('div', { class: 'finding-ring', 'aria-hidden': 'true' }),
+    matchRefs.count,
+    matchRefs.note,
+    h('div', { class: 'btn-row' }, btn('outline', 'Cancel', cancelMatch)));
+  openModal('matching', el, { dismiss: false });
+}
+function renderMatching() {
+  const m = state.matching;
+  if (!m || !matchRefs.count) return;
+  matchRefs.count.textContent = `${m.waiting} of ${m.size} players found`;
+  const secs = Math.ceil(Math.max(0, m.until - Date.now()) / 1000);
+  matchRefs.note.textContent = secs > 0
+    ? `Matching you with random players. If no one else joins, bots fill the empty seats in ${secs}s.`
+    : 'Starting your game with bots in the empty seats…';
+}
+
 // ---------- rules ----------
 function openRules() {
   closeModal('menu');
   const cfg = state.config || {};
   const r = cfg.rules || { loseScore: -200, bagLimit: 10, bagPenalty: 100, nilBonus: 100 };
   const targets = (cfg.tableTargets || [250, 500]).join(' or ');
+  const bid = bidRules();
   const sec = (title, ...items) => h('section', { class: 'rule-sec' }, h('h3', { text: title }), h('ul', {}, items.map((t) => h('li', { text: t }))));
   const { el, body } = modalCard({ title: 'How to Play', id: 'rules', cls: 'wide rules' });
   body.append(
@@ -705,8 +753,8 @@ function openRules() {
       'Four players in two partnerships: you and the player across from you against the other pair. One 52-card deck, 13 cards each. Spades are always trump.',
       `A game is played over several hands. The first team to reach the target score wins. Tables play to ${targets}.`),
     sec('Bidding',
-      'Starting left of the dealer, each player bids how many tricks (1 to 13) they expect to win, or Nil (0). You can’t change a bid.',
-      'Partners’ bids are added together into one team contract. A Nil bid is separate from the contract.'),
+      `Starting left of the dealer, each player bids how many tricks they expect to win. The lowest bid is ${bid.minBid} and the highest is ${bid.maxBid}${bid.allowNil ? ', or you can bid Nil (0)' : ''}. You can’t change a bid.`,
+      `Partners’ bids are added together into one team contract.${bid.allowNil ? ' A Nil bid is separate from the contract.' : ''}`),
     sec('Playing a hand',
       'The player left of the dealer leads. You must follow the suit that was led if you can. If you can’t, play any card, including a spade.',
       'The highest card of the led suit wins the trick, unless a spade was played: then the highest spade wins. The winner leads the next trick.',
@@ -714,14 +762,14 @@ function openRules() {
     sec('Scoring a hand',
       'Making your team bid scores 10 points per bid trick. Falling short loses 10 points per bid trick.',
       `Each trick over the bid is a bag: +1 point each. With sandbags on, collecting ${r.bagLimit} bags costs ${r.bagPenalty} points and takes ${r.bagLimit} off your bag count. The host can turn sandbags off: then bags are not counted and there is no penalty.`,
-      `Nil: a player who bids Nil and takes no tricks scores +${r.nilBonus}. If they take any trick it is −${r.nilBonus}. A Nil bidder’s tricks never count toward their partner’s bid; if the Nil fails those tricks become bags.`),
+      ...(bid.allowNil ? [`Nil: a player who bids Nil and takes no tricks scores +${r.nilBonus}. If they take any trick it is −${r.nilBonus}. A Nil bidder’s tricks never count toward their partner’s bid; if the Nil fails those tricks become bags.`] : [])),
     sec('Winning',
       `The first team to reach ${targets} points (set by the table) wins. A team that falls to ${r.loseScore} or lower loses at once.`,
       'If both teams reach the target in the same hand, the higher score wins. If the scores are exactly equal, play continues with more hands until one team is ahead.'),
     sec('Tournaments',
       `Bracket: single elimination, random seeding. Matches go to ${cfg.tournamentTargetEarly}; the final goes to ${cfg.tournamentTargetFinal}. A team whose players all leave forfeits.`,
       'Tournament (one to eight tables): everyone joins with the host’s code and is seated four to a table; bots fill empty seats. Each table plays one game and the winners are listed.',
-      'Watching is always free, and so is practice against bots. To play with other people you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets.'));
+      'Watching is always free, and so is practice against bots. Free players can also use Quick play: you are matched with random players and bots fill any empty seats after a few seconds, but you cannot choose who you play with. To play with friends you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets and choose who plays.'));
   openModal('rules', el);
 }
 
@@ -954,11 +1002,18 @@ function renderStatus(t) {
 // ---------- bid panel and hand ----------
 let lastBidKey = '';
 
+/** Bid limits come from the server config (CONFIG.rules); these are only the fallback before the welcome message. */
+function bidRules() {
+  const r = (state.config && state.config.rules) || {};
+  return { minBid: r.minBid ?? 4, maxBid: r.maxBid ?? 13, allowNil: r.allowNil ?? true };
+}
+
 function bidPanel(t) {
   const partner = t.seats[(t.mySeat + 2) % 4];
   const grid = h('div', { class: 'bidgrid' });
-  grid.append(h('button', { class: 'bidbtn nil', type: 'button', text: 'Nil', 'aria-label': 'Bid Nil (zero)', onclick: () => send({ t: 'bid', bid: 0 }) }));
-  for (let n = 1; n <= 13; n++) grid.append(h('button', { class: 'bidbtn', type: 'button', text: String(n), onclick: () => send({ t: 'bid', bid: n }) }));
+  const { minBid, maxBid, allowNil } = bidRules();
+  if (allowNil) grid.append(h('button', { class: 'bidbtn nil', type: 'button', text: 'Nil', 'aria-label': 'Bid Nil (zero)', onclick: () => send({ t: 'bid', bid: 0 }) }));
+  for (let n = minBid; n <= maxBid; n++) grid.append(h('button', { class: 'bidbtn', type: 'button', text: String(n), onclick: () => send({ t: 'bid', bid: n }) }));
   return h('div', { class: 'bidpanel' },
     h('div', { class: 'bid-title' }, h('b', { text: 'Your bid' }),
       h('span', { text: partner.bid !== null && partner.bid !== undefined ? `Partner bid ${partner.bid === 0 ? 'Nil' : partner.bid}` : 'Partner has not bid yet' })),

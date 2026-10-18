@@ -14,7 +14,7 @@ const devUnlock = process.env.DEV_UNLOCK === '1';
 const dataFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data/subscriptions.json');
 
 // SPADES_FAST=1 removes the human-friendly pauses (used by the scripted end-to-end check)
-const timings = process.env.SPADES_FAST === '1' ? { botDelayMs: 15, trickPauseMs: 0, handPauseMs: 0, matchEndPauseMs: 300 } : undefined;
+const timings = process.env.SPADES_FAST === '1' ? { botDelayMs: 15, trickPauseMs: 0, handPauseMs: 0, matchEndPauseMs: 300, matchWaitMs: 800 } : undefined;
 const billing = Billing.fromEnv(); // STRIPE_SECRET_KEY + STRIPE_PRICE_ID (env only)
 const running = await startServer({ port, devUnlock, billing, store: new SubscriptionStore(dataFile), timings });
 console.log(`Stripe billing: ${billing.enabled ? 'enabled' : 'not configured (Go Premium shows "not set up yet")'}`);

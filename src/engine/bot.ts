@@ -2,11 +2,12 @@
 // legalPlays() only, so it can never make an illegal move. It reads only its own hand plus public state.
 
 import { Card, rankOf, suitOf } from './cards.js';
+import { CONFIG } from '../config.js';
 import { GameState, beats, legalPlays, partnerOf, teamOf } from './game.js';
 
 const ACE = 12, KING = 11, QUEEN = 10, TEN = 8;
 
-/** Estimate how many tricks a hand will take and turn it into a bid (0 = nil, 1..13). */
+/** Estimate how many tricks a hand will take and turn it into a bid: CONFIG.rules.minBid..maxBid, or 0 = nil for a very weak hand when Nil is allowed. */
 export function chooseBid(g: GameState, seat: number): number {
   const hand = g.hands[seat];
   const bySuit = (s: string) => hand.filter((c) => suitOf(c) === s);
@@ -40,9 +41,9 @@ export function chooseBid(g: GameState, seat: number): number {
   const highSpade = spades.some((c) => rankOf(c) >= TEN);
   const highCards = hand.filter((c) => rankOf(c) >= KING).length;
   const partnerBid = g.bids[partnerOf(seat)];
-  if (est < 1.1 && spades.length <= 2 && !highSpade && highCards <= 1 && partnerBid !== 0) return 0;
+  if (CONFIG.rules.allowNil && est < 1.1 && spades.length <= 2 && !highSpade && highCards <= 1 && partnerBid !== 0) return 0;
 
-  return Math.max(1, Math.min(13, Math.round(est)));
+  return Math.max(CONFIG.rules.minBid, Math.min(CONFIG.rules.maxBid, Math.round(est)));
 }
 
 /** Tricks the seat's team still needs: combined non-nil bid minus tricks won by non-nil players. */

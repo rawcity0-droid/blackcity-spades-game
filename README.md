@@ -52,13 +52,15 @@ then `E2E_URL=ws://localhost:3388/ws E2E_MOCK_PORT=3389 npm run e2e:prod` (fake 
 Every business setting lives in **`src/config.ts`** (price, target scores, bracket sizes, limits, timings).
 The server sends the values the UI needs (price, targets) in the `welcome` message; the client never hard-codes them.
 
-**The rule (from the owner): anyone can watch any game; to play with other humans you must be invited by a Premium customer.**
-A free user's own play is Practice against bots. Premium customers host tables, tournaments and brackets and invite others with a code.
+**The rule (from the owner): anyone can watch any game; free players can play random players (bots fill empty seats) but cannot choose who they play with.
+To pick who you play with you need an invite from a Premium customer.**
+A free user's play is Practice against bots, **Quick play** (random players, see below), or a Premium host's game by code. Premium customers host tables,
+tournaments and brackets and choose who plays by inviting others with a code.
 
 | | Free | Premium (`SUBSCRIPTION_PRICE_USD_PER_MONTH` = 1.99) |
 | --- | --- | --- |
 | Practice vs bots (solo table, bots fill, nobody else can join) | yes | yes |
-| Quick play | a solo practice game vs bots | matches into open public tables, or starts one |
+| Quick play | **random-match queue** with other free Quick-play players; bots fill empty seats after a short wait | matches into open public tables, or starts one at once |
 | **Watch** any table or tournament (by code, or from the lobby list) | yes | yes |
 | Chat as a watcher or player | yes | yes |
 | **Join by code** a table, tournament, bracket or event | only if its host is **Premium right now** (the invitation) | yes |
@@ -70,16 +72,26 @@ free public tables and joining by id). For a free player:
 
 - `createTable` (not practice) and quick-match, `joinTable` by id and `joinTournament` by id are refused with `upgrade_required`
   ("Playing with others needs an invite from a Premium host, or go Premium to host your own"); `createTournament` / `createEvent` with
-  "Upgrade to host — $1.99/month". `quickPlay` starts a solo practice game against bots instead.
+  "Upgrade to host — $1.99/month". `quickPlay` is the random-match queue below.
 - `joinCode` (table, tournament, bracket or event) works only when whoever **created** it (the table's creator, which does not change when the
   host leaves; the organizer for tournaments and their tables) is subscribed at that moment; otherwise `not_allowed` with "That game was not
   made by a Premium host...". A watcher's "Take a seat" is a `joinCode` too, so the same rule applies.
 - A Practice table (`createTable {practice: true}`) is `practice: true` in the table view, never public or listed, and joining it by code is refused.
+- **Quick play for free players is a random-match queue** (`CONFIG.freeRandomMatch`, default `true`; `false` = the old solo game against bots).
+  The player sees "Finding players…" (`matching {active, waiting, size: 4, remainingMs}`), "N of 4 players found" and a Cancel button
+  (`cancelMatch`; Escape and the X also cancel). When **four** free players are queued they start together with no bots. Otherwise, once the oldest
+  waiting player has waited `CONFIG.timing.matchWaitMs` (12 s), everyone queued starts together and **bots fill the empty seats**, with a notice
+  ("Four players found", "2 players found. Bots filled the other seats." or "No other players were looking, so bots joined your table."). One player
+  alone gets a practice table as before. A matched table is private and unlisted (nobody picks it from the lobby), and the players are seated in queue order.
+  Cancelling, disconnecting or closing the tab leaves the queue; a reload or second tab while queued shows the waiting state again. While queued a
+  player cannot create, join or watch tables (`busy`: "You are finding players. Cancel that first"); pressing Quick play again just re-shows the wait.
+  The pool is free Quick-play seekers only: a Premium player's Quick play is unchanged (an open public table, or a new public table with bots), so free
+  players are not randomly seated at Premium hosts' tables and Premium players are not pulled into the free queue.
 - Watching is unchanged: `watchTable`, `watchCode`, `watchTournament`, and spectators still never receive hands.
 - Premium users and the email restore flow are unchanged.
 
-UI: a free user's **Play Online** modal shows Practice, Watch a game, Join with a code, and an upgrade card ("Host a table or tournament",
-Go Premium / Restore Premium). The lobby list is titled "Live games to watch", has **Watch** buttons only (tables and public brackets), and says
+UI: a free user's **Play Online** modal shows **"Quick play: random players (bots fill empty seats)"** (gold tile), Practice, Watch a game, Join with a code,
+and an upgrade card ("Host a table or tournament", Go Premium / Restore Premium). The lobby list is titled "Live games to watch", has **Watch** buttons only (tables and public brackets), and says
 "Ask a Premium host for a table code to play with friends". Premium users keep the full tile set and Join / Watch buttons.
 The "Premium feature" popup appears when a free user tries to host (the home card's Host a Tournament, or an `upgrade_required` reply) and shows the
 server's message. The "Go Premium — $1.99/mo" labels are built from the server's config value.
@@ -239,7 +251,7 @@ saved settings are in `public/music-state.js`).
 ## Rules implemented
 
 - 52 cards, spades are trump, seats 0=N 1=E 2=S 3=W clockwise, partners 0&2 and 1&3. Dealer rotates; the player left of the dealer bids and leads first.
-- Bids 0 to 13 (0 = nil). No blind nil. Must follow suit. **Break rule** (table setting, default on): spades cannot be led until a spade has been played (or the leader holds only spades); off = spades may lead any time.
+- **Bids: the minimum is 4 books, the maximum 13** (`CONFIG.rules.minBid` / `maxBid` in `src/config.ts`; the server rejects anything else and the bid panel only offers valid bids). **Nil (0) is still allowed** (`CONFIG.rules.allowNil`, set it to `false` for a strict "at least 4" game: the Nil button and the bots' Nil go away). There is no other bid restriction: no team or table-total minimum or maximum, no forced bid, no blind nil. Bots bid at least the minimum, or Nil on a hopeless hand while Nil is allowed. Must follow suit. **Break rule** (table setting, default on): spades cannot be led until a spade has been played (or the leader holds only spades); off = spades may lead any time.
 - Score: 10 per bid trick made by the team (partners' bids combine), +1 per extra trick (bag), 10 bags = -100 and bags drop by 10.
   **Sandbags** (table setting, default on): off = no bag points, no bag counting, no penalty (contract and nil still score).
   Nil: +100 if made, -100 if failed. A nil bidder's tricks never count toward the team's bid; if the nil fails, those tricks count as bags.
@@ -290,11 +302,11 @@ JSON over WebSocket at `/ws`. Client messages are `{t: "<type>", ...}`; each is 
 
 - Client to server: `hello {nick, token?}` (an empty nick keeps a returning player's name; a new player has none), `setNick {nick}`, `createTable {isPublic, target, breakRule?, sandbags?, practice?}`,
   `setRules {target?, breakRule?, sandbags?}` (host, before start), `addBots` and `swapPartners` (host, before start; swap rotates the three non-host seats), `joinTable {id}`, `joinCode {code}`, `watchTable {id}`,
-  `watchCode {code}`, `quickPlay`, `startTable`, `bid {bid}`, `play {card}`, `ready`, `rematch`, `leaveTable`,
+  `watchCode {code}`, `quickPlay`, `cancelMatch`, `startTable`, `bid {bid}`, `play {card}`, `ready`, `rematch`, `leaveTable`,
   `createTournament {size, isPublic}`, `joinTournament {id}`, `watchTournament {id}`, `startTournament`, `leaveTournament`,
   `createEvent {tables 1-8, target?}`, `startEvent`, `leaveEvent`, `chat {text}`, `goPremium`, `confirmPremium {sessionId}`, `restorePremium {email}`, `devToggleSubscription`, `ping`. Cards are two characters, rank + suit, such as `AS`, `TH`, `2C`.
 - Server to client: `welcome {token, id, nick, subscribed, config}`, `lobby {tables, tournaments}`, `table {...}` (a full snapshot for you: your
-  hand and legal cards if you are seated; includes `rules {target, breakRule, sandbags}`, `hostSeat`, and `collect {plays, winner}` for the finished trick shown for `trickPauseMs`), `tournament {...}` (bracket), `event {...}` (multi-table tournament), `chatMsg {table, from, role, text, ts, mine}`, `chatHistory {table, msgs}`, `left`, `tournamentLeft`, `eventLeft`, `notice {kind, message}`, `nick`, `subscription {subscribed}`, `checkout {url}`, `premiumResult {ok, code, message}`, `restoreResult {ok, code, message}`, `error {code, message}`, `pong`.
+  hand and legal cards if you are seated; includes `rules {target, breakRule, sandbags}`, `hostSeat`, and `collect {plays, winner}` for the finished trick shown for `trickPauseMs`), `tournament {...}` (bracket), `event {...}` (multi-table tournament), `chatMsg {table, from, role, text, ts, mine}`, `chatHistory {table, msgs}`, `matching {active, waiting, size, remainingMs, waitMs}`, `left`, `tournamentLeft`, `eventLeft`, `notice {kind, message}`, `nick`, `subscription {subscribed}`, `checkout {url}`, `premiumResult {ok, code, message}`, `restoreResult {ok, code, message}`, `error {code, message}`, `pong`.
 - Error codes: `bad_message`, `rate_limited`, `not_hello`, `upgrade_required`, `not_found`, `not_allowed`, `illegal`, `full`, `busy`,
   `too_many`, `not_seated`, `wrong_state`, `name_required`.
 - Nicknames are sanitized on the server (length 16, control characters and `< > & " ' \`` removed; may end up empty, there is no default); the client renders all text with `textContent`.

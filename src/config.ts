@@ -30,6 +30,10 @@ export const CONFIG = {
   spectatePrivateTables: SPECTATE_PRIVATE_TABLES,
   subscriptionPriceUsdPerMonth: SUBSCRIPTION_PRICE_USD_PER_MONTH,
 
+  // Bidding: the only restriction on a bid. A bid is a whole number of books from minBid to maxBid. allowNil also lets a player bid
+  // Nil (0 books, scored separately); set it to false for a strict "at least minBid" game. Nothing else limits bids (no team or total minimum).
+  rules: { minBid: 4, maxBid: 13, allowNil: true },
+
   // Rules
   loseScore: -200,        // a team at or below this loses immediately
   bagLimit: 10,           // this many bags costs bagPenalty and resets bags by bagLimit
@@ -53,6 +57,7 @@ export const CONFIG = {
   //   playWithOthersNeedsInvite: a free user cannot create a table with others, quick-match into other people's tables or join by
   //     table id from the lobby; they can only join by code, and only when the table's host is a current Premium member.
   //     Set false to let free users create / join public tables like before.
+  freeRandomMatch: true, // see above: free Quick play = random-match queue (bots fill empty seats after timing.matchWaitMs); false = solo vs bots
   hostOnly: { privateTables: true, hostTournaments: true, playWithOthersNeedsInvite: true },
 
   // Server limits and timings (milliseconds)
@@ -80,6 +85,7 @@ export const CONFIG = {
     abandonMs: 60000,       // tournament table: forfeit/fast-forward after this long without humans
     matchEndPauseMs: 7000,  // show the game-over screen before returning to the bracket
     seatHoldMs: 120000,     // a disconnected human's seat can be released to a waiting player after this
+    matchWaitMs: 12000,     // Quick play for a free player: wait this long for other random players, then bots fill the empty seats
   },
 } as const;
 

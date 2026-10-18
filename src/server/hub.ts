@@ -83,6 +83,9 @@ export class Hub {
   private rng: Rng;
   private rate: { burst: number; perSecond: number };
   private lobbyTimer: NodeJS.Timeout | null = null;
+  /** Free players waiting for random opponents (Quick play), oldest first. */
+  private matchQueue: { id: string; since: number }[] = [];
+  private matchTimer: NodeJS.Timeout | null = null;
   connections = 0;
 
   constructor(opts: HubOptions = {}) {
@@ -149,6 +152,7 @@ export class Hub {
     if (!p || p.ws !== conn.ws) return; // replaced by a newer connection
     p.ws = null;
     p.lastSeen = Date.now();
+    this.dequeue(p.id); // a disconnect leaves the random-match queue
     if (p.watchTableId) { this.tables.get(p.watchTableId)?.unwatch(p.id); p.watchTableId = null; }
     const seated = p.tableId ? this.tables.get(p.tableId) : undefined;
     if (seated && seated.seatOf(p.id) >= 0) seated.setConnected(p.id, false);
@@ -160,6 +164,7 @@ export class Hub {
 
   close(): void {
     if (this.lobbyTimer) clearTimeout(this.lobbyTimer);
+    if (this.matchTimer) clearTimeout(this.matchTimer);
     for (const t of this.tables.values()) t.dispose();
     this.tables.clear();
   }
@@ -226,11 +231,12 @@ export class Hub {
         eventTableOptions: CONFIG.eventTableOptions,
         eventTarget: CONFIG.eventTarget,
         codeLength: CONFIG.codeLength,
-        rules: { loseScore: CONFIG.loseScore, bagLimit: CONFIG.bagLimit, bagPenalty: CONFIG.bagPenalty, nilBonus: CONFIG.nilBonus },
+        rules: { minBid: CONFIG.rules.minBid, maxBid: CONFIG.rules.maxBid, allowNil: CONFIG.rules.allowNil, loseScore: CONFIG.loseScore, bagLimit: CONFIG.bagLimit, bagPenalty: CONFIG.bagPenalty, nilBonus: CONFIG.nilBonus },
         devUnlock: this.devUnlock,
         playWithOthersNeedsInvite: CONFIG.hostOnly.playWithOthersNeedsInvite,
       },
     });
+    this.sendMatching(p); // a second tab / reload while still queued shows the waiting state again
     const table = p.tableId ? this.tables.get(p.tableId) : undefined;
     if (table && table.seatOf(p.id) >= 0) table.setConnected(p.id, true);
     else { p.tableId = null; this.sendWs(conn.ws, this.lobbyMessage()); }
@@ -307,6 +313,7 @@ export class Hub {
       case 'joinCode': return this.joinCode(p, msg.code);
       case 'watchCode': return this.watchCode(p, msg.code);
       case 'quickPlay': return this.quickPlay(p);
+      case 'cancelMatch': return void this.cancelMatch(p);
       case 'startTable': return this.tableAction(p, (t) => t.start(p.id));
       case 'bid': return this.tableAction(p, (t) => t.bid(p.id, msg.bid));
       case 'play': return this.tableAction(p, (t) => t.play(p.id, msg.card));
@@ -332,6 +339,7 @@ export class Hub {
   }
 
   private busyReason(p: Player): string | null {
+    if (this.inQueue(p.id)) return 'You are finding players. Cancel that first';
     if (p.tableId) return 'Leave your current table first';
     const t = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
     if (t && (t.state === 'registering' || t.state === 'running')) return 'You are in a tournament. Leave it first';
@@ -462,6 +470,7 @@ export class Hub {
     if (!t || (byId && !t.isPublic && !t.tournament)) return this.err(p, 'not_found', 'Table not found');
     if (!CONFIG.spectatePrivateTables && !t.isPublic && !t.tournament) return this.err(p, 'not_allowed', 'This table cannot be watched');
     if (p.tableId) return this.err(p, 'busy', 'Leave your current table first');
+    if (this.inQueue(p.id)) return this.err(p, 'busy', 'You are finding players. Cancel that first');
     if (p.watchTableId === t.id) return;
     this.leaveCurrent(p);
     p.watchTableId = t.id;
@@ -475,20 +484,96 @@ export class Hub {
   }
 
   private quickPlay(p: Player): void {
+    if (this.inQueue(p.id)) return this.sendMatching(p); // pressed twice: just show the waiting state again
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
-    // Free players do not get matched with other people: quick play is a solo practice game against bots for them.
-    const solo = this.needsInvite(p);
-    const candidates = solo ? [] : [...this.tables.values()]
+    // Free players cannot choose who they play with: Quick play puts them in the random-match queue, and bots fill empty seats after a short wait.
+    if (this.needsInvite(p)) {
+      if (CONFIG.freeRandomMatch) return this.enqueue(p);
+      return this.startMatch([p.id]); // switched off: a solo game against bots
+    }
+    const candidates = [...this.tables.values()]
       .filter((t) => t.isPublic && !t.practice && !t.tournament && t.openSeats() > 0 && t.status !== 'finished')
       .sort((a, b) => (a.status === 'waiting' ? 0 : 1) - (b.status === 'waiting' ? 0 : 1) || b.humanCount() - a.humanCount());
     if (candidates.length > 0) return this.joinTable(p, candidates[0], true);
     if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
     this.leaveCurrent(p);
-    const table = this.makeTable({ isPublic: !solo, target: CONFIG.quickPlayTarget, hostId: p.id, practice: solo });
+    const table = this.makeTable({ isPublic: true, target: CONFIG.quickPlayTarget, hostId: p.id, practice: false });
     table.seatHuman(0, p.id, p.nick, true);
     p.tableId = table.id;
     table.startGame(); // bots fill the other seats at once
+  }
+
+  // ---------- random-match queue (free players' Quick play) ----------
+
+  private inQueue(id: string): boolean { return this.matchQueue.some((q) => q.id === id); }
+
+  private enqueue(p: Player): void {
+    if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
+    this.leaveCurrent(p);
+    this.matchQueue.push({ id: p.id, since: Date.now() });
+    if (this.matchQueue.length >= 4) return this.formMatch();
+    this.broadcastMatching();
+    this.armMatchTimer();
+  }
+
+  private dequeue(id: string): boolean {
+    const i = this.matchQueue.findIndex((q) => q.id === id);
+    if (i < 0) return false;
+    this.matchQueue.splice(i, 1);
+    if (this.matchQueue.length === 0 && this.matchTimer) { clearTimeout(this.matchTimer); this.matchTimer = null; }
+    else this.armMatchTimer();
+    this.broadcastMatching();
+    return true;
+  }
+
+  private cancelMatch(p: Player): void {
+    if (this.dequeue(p.id)) this.send(p.id, { t: 'matching', active: false });
+  }
+
+  /** Everyone waiting is told how many are queued and how long until bots fill in. */
+  private broadcastMatching(): void { for (const q of this.matchQueue) { const p = this.players.get(q.id); if (p) this.sendMatching(p); } }
+
+  private sendMatching(p: Player): void {
+    const q = this.matchQueue.find((x) => x.id === p.id);
+    if (!q) return;
+    const waitMs = this.timings.matchWaitMs;
+    const first = this.matchQueue[0].since;
+    this.send(p.id, { t: 'matching', active: true, waiting: this.matchQueue.length, size: 4, remainingMs: Math.max(0, first + waitMs - Date.now()), waitMs });
+  }
+
+  /** One timer for the oldest waiting player: when their wait is over, everyone queued starts together with bots in the empty seats. */
+  private armMatchTimer(): void {
+    if (this.matchTimer) { clearTimeout(this.matchTimer); this.matchTimer = null; }
+    if (this.matchQueue.length === 0) return;
+    const delay = Math.max(0, this.matchQueue[0].since + this.timings.matchWaitMs - Date.now());
+    this.matchTimer = setTimeout(() => { this.matchTimer = null; this.formMatch(); }, delay);
+    this.matchTimer.unref?.();
+  }
+
+  /** Take up to four queued players and start their table; bots fill whatever seats are empty. */
+  private formMatch(): void {
+    const ids = this.matchQueue.splice(0, 4).map((q) => q.id).filter((id) => !!this.players.get(id)?.ws);
+    if (this.matchTimer) { clearTimeout(this.matchTimer); this.matchTimer = null; }
+    this.armMatchTimer();
+    this.broadcastMatching();
+    if (ids.length > 0) this.startMatch(ids);
+  }
+
+  /** A random-match table: one human is a solo practice game, two to four are a private, unlisted table (nobody can join it by id or code mid-game). */
+  private startMatch(ids: string[]): void {
+    const people = ids.map((id) => this.players.get(id)!);
+    if (this.tables.size >= CONFIG.limits.maxTables) { for (const p of people) { this.send(p.id, { t: 'matching', active: false }); this.err(p, 'too_many', 'The server is busy. Try again soon'); } return; }
+    const solo = people.length === 1;
+    const table = this.makeTable({ isPublic: false, target: CONFIG.quickPlayTarget, hostId: people[0].id, practice: solo });
+    people.forEach((p, i) => { this.leaveCurrent(p); table.seatHuman(i, p.id, p.nick, true); p.tableId = table.id; });
+    const bots = 4 - people.length;
+    const message = bots === 0 ? 'Four players found. Good luck!'
+      : solo ? 'No other players were looking, so bots joined your table.'
+        : `${people.length} players found. Bots filled the other ${bots === 1 ? 'seat' : 'seats'}.`;
+    for (const p of people) { this.send(p.id, { t: 'matching', active: false }); this.send(p.id, { t: 'notice', kind: 'match', message }); }
+    table.startGame();
+    this.markLobbyDirty();
   }
 
   private leaveTable(p: Player): void {

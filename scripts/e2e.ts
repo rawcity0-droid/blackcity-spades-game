@@ -28,7 +28,7 @@ class Bot {
         if (key === this.acted) return;
         this.acted = key;
         // paced like a fast human (the server rate-limits to ~15 messages/second per connection)
-        const move = m.canBid ? { t: 'bid', bid: 3 } : { t: 'play', card: m.legal[Math.floor(Math.random() * m.legal.length)] };
+        const move = m.canBid ? { t: 'bid', bid: 4 } : { t: 'play', card: m.legal[Math.floor(Math.random() * m.legal.length)] };
         setTimeout(() => { if (this.ws.readyState === 1) this.send(move); }, 70);
       }
     });
@@ -84,7 +84,7 @@ async function main() {
   free.send({ t: 'createTable', isPublic: false, target: 250 });
   const up = await free.wait((m) => m.t === 'error');
   check(up.code === 'upgrade_required' && /Upgrade to host — \$\d+\.\d{2}\/month/.test(up.message), `D: free user gets "${up.message}"`);
-  // free users cannot make a table for others, match into other people's tables, or join by id; they get a solo game from quick play
+  // free users cannot make a table for others, match into other people's tables, or join by id; Quick play for a free user waits for random players, then bots fill the seats
   const nTables = free.log.length;
   free.send({ t: 'createTable', isPublic: true, target: 250 });
   const inv = await free.wait((m) => m.t === 'error' && free.log.indexOf(m) >= nTables);
@@ -93,9 +93,25 @@ async function main() {
   const byId = await free.wait((m) => m.t === 'error' && free.log.indexOf(m) > free.log.indexOf(inv));
   check(byId.code === 'upgrade_required', 'D: free user cannot join a table by id');
   free.send({ t: 'quickPlay' });
-  const solo = await free.wait((m) => m.t === 'table');
-  check(solo.practice === true && solo.seats.filter((x: any) => x.kind === 'human').length === 1, 'D: free quickPlay is a solo practice table with bots');
+  const finding = await free.wait((m) => m.t === 'matching' && m.active);
+  check(finding.waiting === 1 && finding.size === 4, 'D: free quickPlay shows "Finding players" (1 of 4) first');
+  const solo = await free.wait((m) => m.t === 'table', 20000);
+  check(solo.practice === true && solo.seats.filter((x: any) => x.kind === 'human').length === 1 && solo.seats.filter((x: any) => x.kind === 'bot').length === 3, 'D: nobody else came, so bots filled the table after the wait');
   free.send({ t: 'leaveTable' }); await free.wait((m) => m.t === 'left');
+  // two free players who press Quick play together are matched with each other, bots take the other two seats
+  const f2 = new Bot(); await f2.connect('Fran');
+  free.send({ t: 'quickPlay' });
+  f2.send({ t: 'quickPlay' });
+  const m1 = await free.wait((m) => m.t === 'table' && m.id !== solo.id, 20000);
+  const m2 = await f2.wait((m) => m.t === 'table', 20000);
+  check(m1.id === m2.id && m1.seats.filter((x: any) => x.kind === 'human').length === 2 && m1.seats.filter((x: any) => x.kind === 'bot').length === 2, 'D: two free quickPlay players share one table with two bots');
+  free.send({ t: 'leaveTable' }); await free.wait((m) => m.t === 'left');
+  f2.send({ t: 'leaveTable' }); f2.ws.close();
+  // cancelling the queue works
+  free.send({ t: 'quickPlay' }); await free.wait((m) => m.t === 'matching' && m.active && free.log.indexOf(m) > free.log.length - 4);
+  free.send({ t: 'cancelMatch' });
+  const canc = await free.wait((m) => m.t === 'matching' && m.active === false);
+  check(canc.active === false, 'D: cancelMatch leaves the queue');
 
   // E: tournament (needs the dev toggle)
   if (sub) {

@@ -5,12 +5,13 @@ import { test } from 'node:test';
 import { chooseBid, choosePlay } from '../src/engine/bot.js';
 import { RANKS, mulberry32, newDeck, rankOf, shuffle, suitOf, dealHands } from '../src/engine/cards.js';
 import {
-  EngineError, GameState, createGame, gameWinner, legalPlays, nextHand, placeBid, playCard, scoreTeam, trickWinner,
+  EngineError, GameState, createGame, legalBids, gameWinner, legalPlays, nextHand, placeBid, playCard, scoreTeam, trickWinner,
 } from '../src/engine/game.js';
+import { CONFIG } from '../src/config.js';
 import { botStep, simulateGame } from '../src/engine/sim.js';
 
 /** Game in the playing phase with given hands; seat 1 leads (dealer 0). */
-function playing(hands: string[][], bids = [3, 3, 3, 3], target = 500): GameState {
+function playing(hands: string[][], bids = [4, 4, 4, 4], target = 500): GameState {
   const g = createGame({ target, rng: mulberry32(1), dealer: 0 });
   g.hands = hands.map((h) => h.slice());
   for (let s = 0; s < 4; s++) placeBid(g, g.turn, bids[g.turn]);
@@ -41,20 +42,40 @@ test('dealHands gives 4 hands of 13 covering the deck', () => {
   assert.deepEqual(hands.flat().sort(), newDeck().sort());
 });
 
-test('bidding: 0-13 accepted, others rejected, order is left of dealer', () => {
+test('bidding: the only limit is the minimum (4 to 13, plus Nil); order is left of dealer', () => {
   const g = createGame({ rng: mulberry32(2), dealer: 0 });
   assert.equal(g.turn, 1);
-  assert.throws(() => placeBid(g, 1, 14), EngineError);
-  assert.throws(() => placeBid(g, 1, -1), EngineError);
-  assert.throws(() => placeBid(g, 1, 2.5), EngineError);
-  assert.throws(() => placeBid(g, 2, 3), EngineError); // not seat 2's turn
-  placeBid(g, 1, 0);
+  assert.deepEqual(legalBids(), [0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  for (const bad of [1, 2, 3, 14, -1, 2.5, NaN]) assert.throws(() => placeBid(g, 1, bad), EngineError, `bid ${bad} must be rejected`);
+  assert.throws(() => placeBid(g, 1, 3), /Bid must be 4 to 13/);
+  assert.throws(() => placeBid(g, 2, 4), EngineError); // not seat 2's turn
+  placeBid(g, 1, 0); // Nil is still allowed (CONFIG.rules.allowNil)
   placeBid(g, 2, 13);
   placeBid(g, 3, 4);
   assert.equal(g.phase, 'bidding');
-  placeBid(g, 0, 1);
+  placeBid(g, 0, 4);
   assert.equal(g.phase, 'playing');
   assert.equal(g.turn, 1);
+  assert.deepEqual(g.bids, [4, 0, 13, 4]);
+});
+
+test('nothing else restricts bids: any team total is fine, and with allowNil off even 0 is rejected', () => {
+  const g = createGame({ rng: mulberry32(2), dealer: 0 });
+  placeBid(g, 1, 13); placeBid(g, 2, 13); placeBid(g, 3, 13); placeBid(g, 0, 13); // 26 books between two teams: no total limit
+  assert.equal(g.phase, 'playing');
+  const saved = CONFIG.rules.allowNil;
+  CONFIG.rules.allowNil = false;
+  try {
+    const h = createGame({ rng: mulberry32(3), dealer: 0 });
+    assert.deepEqual(legalBids(), [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    assert.throws(() => placeBid(h, 1, 0), /Bid must be 4 to 13$/);
+    placeBid(h, 1, 4);
+    // bots follow the same switch
+    for (let seed = 1; seed <= 300; seed++) {
+      const x = createGame({ rng: mulberry32(seed), dealer: 0 });
+      while (x.phase === 'bidding') { const b = chooseBid(x, x.turn); assert.ok(b >= 4 && b <= 13, `bot bid ${b}`); placeBid(x, x.turn, b); }
+    }
+  } finally { CONFIG.rules.allowNil = saved; }
 });
 
 test('must follow suit when able; any card when void', () => {
@@ -282,8 +303,9 @@ test('bot never makes an illegal bid or play over thousands of random hands', ()
     // random-ish table: mix bot choices with random legal choices so unusual states occur
     const wild = mulberry32(seed);
     while (g.phase === 'bidding') {
-      const bid = wild() < 0.3 ? Math.floor(wild() * 14) : chooseBid(g, g.turn);
-      assert.ok(Number.isInteger(bid) && bid >= 0 && bid <= 13);
+      const legal = legalBids();
+      const bid = wild() < 0.3 ? legal[Math.floor(wild() * legal.length)] : chooseBid(g, g.turn);
+      assert.ok(legal.includes(bid), `bot bid ${bid}`); // never 1, 2 or 3
       placeBid(g, g.turn, bid);
     }
     while (g.phase === 'playing') {
@@ -316,7 +338,10 @@ test('bots bid sanely: a strong hand bids more than a weak one', () => {
   g.hands[1] = ['AS', 'KS', 'QS', 'JS', '9S', 'AH', 'KH', 'AD', 'KD', 'AC', '2C', '3C', '4C'];
   g.hands[2] = ['2S', '3H', '4H', '5H', '6D', '7D', '8D', '9C', 'TC', '3C', '4C', '5C', '6C'];
   assert.ok(chooseBid(g, 1) >= 6);
-  assert.ok(chooseBid(g, 2) <= 1);
+  assert.equal(chooseBid(g, 2), 0, 'a hopeless hand still goes Nil (allowed)');
+  g.hands[3] = ['2S', '3S', '4S', '5S', 'KH', 'QH', 'KD', 'QD', 'KC', 'QC', '9C', '8C', '7C'];
+  const mid = chooseBid(g, 3);
+  assert.ok(mid >= 4 && mid <= 13, `a middling hand never bids 1 to 3, got ${mid}`);
 });
 
 test('rank helper orders cards', () => {
@@ -336,7 +361,7 @@ test('break rule ON (default): a spade cannot be led while a non-spade is held; 
   const g = createGame({ rng: mulberry32(1), dealer: 0, breakRule: false });
   assert.equal(g.breakRule, false);
   g.hands = hands.map((h) => h.slice());
-  for (let s = 0; s < 4; s++) placeBid(g, g.turn, 3);
+  for (let s = 0; s < 4; s++) placeBid(g, g.turn, 4);
   assert.deepEqual(legalPlays(g, 1).sort(), ['3D', '9S']);
   playCard(g, 1, '9S'); // allowed with the break rule off, and it is still tracked as broken
   assert.equal(g.spadesBroken, true);

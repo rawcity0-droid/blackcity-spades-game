@@ -4,7 +4,7 @@ import WebSocket from 'ws';
 import { RunningServer, startServer } from '../src/server/server.js';
 import type { HubOptions } from '../src/server/hub.js';
 
-export const FAST = { botDelayMs: 0, trickPauseMs: 0, handPauseMs: 0, matchEndPauseMs: 0, abandonMs: 150, emptyTableTtlMs: 60000, seatHoldMs: 60000 };
+export const FAST = { botDelayMs: 0, trickPauseMs: 0, handPauseMs: 0, matchEndPauseMs: 0, abandonMs: 150, emptyTableTtlMs: 60000, seatHoldMs: 60000, matchWaitMs: 40 };
 
 export async function testServer(opts: HubOptions = {}): Promise<RunningServer> {
   return startServer({
@@ -64,12 +64,12 @@ export async function connect(port: number, nick: string, token?: string): Promi
   return { c, welcome };
 }
 
-/** Auto-play a seated client: bid 3, then play the first legal card. Stops when `stop()` returns true. */
+/** Auto-play a seated client: bid 4, then play the first legal card. Stops when `stop()` returns true. */
 export function autoPlay(c: Client): void {
   c.ws.on('message', (d) => {
     const m = JSON.parse(d.toString());
     if (m.t !== 'table' || m.spectator) return;
-    if (m.canBid) c.send({ t: 'bid', bid: 3 });
+    if (m.canBid) c.send({ t: 'bid', bid: 4 });
     else if (m.legal && m.legal.length > 0) c.send({ t: 'play', card: m.legal[0] });
   });
 }
