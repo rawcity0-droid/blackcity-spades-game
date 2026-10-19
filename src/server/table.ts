@@ -83,6 +83,13 @@ export const FACE_BOTS: { name: string; face: string }[] = [
   { name: 'Marcus', face: 'marcus' }, { name: 'Tasha', face: 'tasha' }, { name: 'Luis', face: 'luis' },
   { name: 'Keisha', face: 'keisha' }, { name: 'Big Jerome', face: 'jerome' }, { name: 'Mari', face: 'mari' },
   { name: 'Dre', face: 'dre' }, { name: 'Miss Pearl', face: 'pearl' }, { name: 'Cooper', face: 'cooper' }, { name: 'Kim', face: 'kim' },
+  // Not every player uses a selfie: cars, graphics, pets and cartoon avatars (all original, no real people or brands)
+  { name: 'Lowrider Lou', face: 'lowrider' }, { name: 'King Spade', face: 'crown' }, { name: 'Midnight Moe', face: 'muscle' },
+  { name: 'Fresh Kicks', face: 'kicks' }, { name: 'Brick', face: 'pitbull' }, { name: 'Big Cat Leo', face: 'lion' },
+  { name: 'Red Hood Rome', face: 'anime2' }, { name: 'Four Aces', face: 'aces' }, { name: 'Whiskers', face: 'cat' },
+  { name: 'Buckets', face: 'hoops' }, { name: 'Spray Can Sam', face: 'graffiti' }, { name: 'Lone Wolf', face: 'wolf' },
+  { name: 'Granny Hands', face: 'granny' }, { name: 'Boombox Benny', face: 'boombox' }, { name: 'Purple Rain', face: 'anime1' },
+  { name: 'Chopper Chuck', face: 'chopper' },
 ];
 export const RAW_ONE = { name: 'Raw 1', face: 'raw1' };
 

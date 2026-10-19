@@ -367,7 +367,7 @@ real client IP (rate limiting is per connection today), and backups of `data/`.
 
 ## Bot faces and bot chat
 
-- Bots get names from `BOT_NAMES` (street-style nicknames) in `src/server/table.ts`. Some bots come with a photo from `public/faces/<id>.jpg` (`FACE_BOTS`),
+- Bots get names from `BOT_NAMES` (street-style nicknames) in `src/server/table.ts`. Most bots (about 65%) come with a picture from `public/faces/<id>.jpg` (`FACE_BOTS`): portraits plus cars, graphics, pets and cartoon avatars,
   and the owner's own "Raw 1" bot (`RAW_ONE`, `public/faces/raw1.jpg`) joins about half of the bot-filled tables (`CONFIG.botFaces`). The table view carries
   `face` for bot seats only; the client shows the photo, or the first letter of the name when a bot has none.
 - Bots talk in the table chat (`src/server/botchat.ts`): hellos, short back-and-forth conversations between two bots, reactions to big bids, Nil, tricks,

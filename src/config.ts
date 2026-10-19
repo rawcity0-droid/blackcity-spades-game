@@ -61,7 +61,7 @@ export const CONFIG = {
   //     table id from the lobby; they can only join by code, and only when the table's host is a current Premium member.
   //     Set false to let free users create / join public tables like before.
   /** Bot seats: some get a face photo (public/faces/<id>.jpg); "Raw 1" shows up often. */
-  botFaces: { chance: 0.45, rawOneChance: 0.2 },
+  botFaces: { chance: 0.65, rawOneChance: 0.2 },
   /** Bot personalities, picked when a bot sits down: trash talkers use sharper (clean) taunts, strong bots count cards and play better. */
   botPersonality: { trashChance: 0.33, strongChance: 0.33 },
   freeRandomMatch: true, // see above: free Quick play = random-match queue (bots fill empty seats after timing.matchWaitMs); false = solo vs bots
