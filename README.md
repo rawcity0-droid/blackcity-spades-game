@@ -364,3 +364,12 @@ should work: `npm ci && npm run build`, start with `npm run start:prod`, set `PO
 one instance only. **Free-tier limits of any host were not checked**; many free plans sleep when idle or limit connections, so check
 the current terms before choosing. For real use also add: a persistent store for subscriptions, a reverse proxy or host setting for a
 real client IP (rate limiting is per connection today), and backups of `data/`.
+
+## Bot faces and bot chat
+
+- Bots get names from `BOT_NAMES` (street-style nicknames) in `src/server/table.ts`. Some bots come with a photo from `public/faces/<id>.jpg` (`FACE_BOTS`),
+  and the owner's own "Raw 1" bot (`RAW_ONE`, `public/faces/raw1.jpg`) joins about half of the bot-filled tables (`CONFIG.botFaces`). The table view carries
+  `face` for bot seats only; the client shows the photo, or the first letter of the name when a bot has none.
+- Bots talk in the table chat (`src/server/botchat.ts`): hellos, short back-and-forth conversations between two bots, reactions to big bids, Nil, tricks,
+  sets and the final score, and replies when a person writes. Speed comes from `CONFIG.timing.botChatPace` (1 = normal, 0 = silent; tests use 0).
+  If asked whether they are bots they joke and change the subject; they never claim to be human.

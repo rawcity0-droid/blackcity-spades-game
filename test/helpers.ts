@@ -4,7 +4,7 @@ import WebSocket from 'ws';
 import { RunningServer, startServer } from '../src/server/server.js';
 import type { HubOptions } from '../src/server/hub.js';
 
-export const FAST = { botDelayMs: 0, trickPauseMs: 0, handPauseMs: 0, matchEndPauseMs: 0, abandonMs: 150, emptyTableTtlMs: 60000, seatHoldMs: 60000, matchWaitMs: 40 };
+export const FAST = { botDelayMs: 0, trickPauseMs: 0, handPauseMs: 0, matchEndPauseMs: 0, abandonMs: 150, emptyTableTtlMs: 60000, seatHoldMs: 60000, matchWaitMs: 40, botChatPace: 0 };
 
 export async function testServer(opts: HubOptions = {}): Promise<RunningServer> {
   return startServer({

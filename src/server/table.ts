@@ -9,6 +9,7 @@ import {
   teamOf, PlayOutcome,
 } from '../engine/game.js';
 import { chooseBid, choosePlay } from '../engine/bot.js';
+import { BotChat } from './botchat.js';
 
 export type SeatKind = 'empty' | 'bot' | 'human';
 export type TableStatus = 'waiting' | 'playing' | 'finished';
@@ -22,6 +23,7 @@ export interface SeatInfo {
   botActed: boolean;        // the bot has acted for this seat in the current hand
   disconnectedAt: number | null;
   ready: boolean;
+  face?: string;            // bots only: id of a profile photo in public/faces
 }
 
 export type Timings = { -readonly [K in keyof typeof CONFIG.timing]: number };
@@ -58,10 +60,10 @@ const fail = (code: string, message: string) => ({ ok: false as const, code, mes
 const BOT_NAMES = [
   'Ace', 'Duke', 'Queenie', 'Jax', 'Maverick', 'Sage', 'Rook', 'Dottie',
   'Blaze', 'Nova', 'Pip', 'Otis', 'Big Mike', 'Lil Tone', 'Peanut', 'Smoke',
-  'Tank', 'Slim', 'Cash', 'Dre', 'Showtime', 'Ghost', 'Bishop', 'Truck',
+  'Tank', 'Slim', 'Cash', 'Showtime', 'Ghost', 'Bishop', 'Truck',
   'Mookie', 'Boogie', 'Pooh', 'Scoop', 'Juice', 'Fats', 'Money Mal', 'Cookie',
   'Shorty', 'Tito', 'Sticks', 'Rico', 'Deuce', 'Squeaky', 'Biscuit', 'Gizmo',
-  'Rell', 'Tay', 'Nene', 'Keke', 'Mama Jo', 'Miss Pearl', 'Auntie Em', 'Big Cuz',
+  'Rell', 'Tay', 'Nene', 'Keke', 'Mama Jo', 'Auntie Em', 'Big Cuz',
   'Low', 'Zeke', 'Flip', 'Hustle', 'Pockets', 'Dollar', 'Big Hen', 'Lucky',
   'Spade Dad', 'Sweets', 'Cheeks', 'Bam', 'Hollis', 'Crenshaw', 'Flatbush', 'Lenox',
   'Broad St', 'Southside', 'Eastside', 'Westside', 'Northside', 'The Block', '5th Ward', 'Uptown',
@@ -71,6 +73,14 @@ const BOT_NAMES = [
   'Boots', 'Rocco', 'Tre', 'Cap', 'Rude Boy', 'OG Ray', 'Tea', 'Ride',
   'Cuz', 'Pop', 'Nikki B',
 ];
+
+/** Bots that come with a photo (public/faces/<face>.jpg). "Raw 1" is the owner's own. */
+export const FACE_BOTS: { name: string; face: string }[] = [
+  { name: 'Marcus', face: 'marcus' }, { name: 'Tasha', face: 'tasha' }, { name: 'Luis', face: 'luis' },
+  { name: 'Keisha', face: 'keisha' }, { name: 'Big Jerome', face: 'jerome' }, { name: 'Mari', face: 'mari' },
+  { name: 'Dre', face: 'dre' }, { name: 'Miss Pearl', face: 'pearl' }, { name: 'Cooper', face: 'cooper' }, { name: 'Kim', face: 'kim' },
+];
+export const RAW_ONE = { name: 'Raw 1', face: 'raw1' };
 
 export interface ChatLine { from: string; role: 'player' | 'watcher'; text: string; ts: number; by: string }
 
@@ -112,6 +122,7 @@ export class Table {
   private idleTimer: NodeJS.Timeout | null = null;
   private endTimer: NodeJS.Timeout | null = null;
   private dead = false;
+  private botChat: BotChat;
 
   constructor(init: TableInit) {
     this.id = init.id;
@@ -128,6 +139,13 @@ export class Table {
     this.timings = init.timings;
     this.hooks = init.hooks;
     this.rng = init.rng ?? secureRng;
+    this.botChat = new BotChat({
+      rng: this.rng,
+      bots: () => this.seats.map((s, i) => ({ seat: i, name: s.name, kind: s.kind })).filter((b) => b.kind === 'bot'),
+      humans: () => this.seats.map((s, i) => ({ seat: i, name: s.name, kind: s.kind, on: s.connected })).filter((h) => h.kind === 'human' && h.on),
+      say: (seat, name, text) => this.postBotChat(seat, name, text),
+      playing: () => this.status === 'playing',
+    }, init.tournament ? 0 : this.timings.botChatPace ?? 0);
     this.tournament = init.tournament;
   }
 
@@ -151,10 +169,14 @@ export class Table {
     return Math.max(0, free - this.waiters.length);
   }
 
-  private botName(): string {
+  /** Pick a name (and sometimes a photo) for a new bot: never one already at this table. */
+  private botPersona(): { name: string; face?: string } {
     const used = new Set(this.seats.map((s) => s.name));
+    if (!used.has(RAW_ONE.name) && this.rng() < CONFIG.botFaces.rawOneChance) return RAW_ONE;
+    const faces = FACE_BOTS.filter((f) => !used.has(f.name));
+    if (faces.length && this.rng() < CONFIG.botFaces.chance) return faces[Math.floor(this.rng() * faces.length)];
     const free = BOT_NAMES.filter((n) => !used.has(n));
-    return free.length ? free[Math.floor(this.rng() * free.length)] : 'Bot';
+    return { name: free.length ? free[Math.floor(this.rng() * free.length)] : 'Bot' };
   }
 
   /** Put a human directly in a seat (used for tournament match setup and by sit()). */
@@ -165,7 +187,7 @@ export class Table {
     if (this.hostId === null && !this.tournament) this.hostId = pid;
   }
   seatBot(seat: number): void {
-    this.seats[seat] = { ...emptySeat(), kind: 'bot', name: this.botName() };
+    this.seats[seat] = { ...emptySeat(), kind: 'bot', ...this.botPersona() };
   }
   seatNamedBot(seat: number, name: string): void {
     this.seats[seat] = { ...emptySeat(), kind: 'bot', name };
@@ -304,6 +326,7 @@ export class Table {
     this.broadcast();
     this.hooks.changed();
     this.evaluateAbsence();
+    this.botChat.start();
     this.advance();
   }
 
@@ -334,6 +357,7 @@ export class Table {
     if (!g || this.status !== 'playing' || this.pause) return fail('wrong_state', 'Not now');
     if (this.seats[i].botControlled) return fail('wrong_state', 'A bot is playing your seat until the next hand');
     try { placeBid(g, i, bid); } catch (e) { return this.engineFail(e); }
+    this.botChat.onBid(i, bid);
     this.broadcast();
     this.advance();
     return { ok: true };
@@ -357,6 +381,8 @@ export class Table {
   }
 
   private afterPlay(out: PlayOutcome): void {
+    if (out.trick) this.botChat.onTrick(out.trick.winner);
+    if (out.handDone && this.game?.lastHand) { const r = this.game.lastHand.teams; this.botChat.onHandEnd([r[0].made, r[1].made]); }
     const pauseMs = this.fastForward ? 0 : this.timings.trickPauseMs;
     if (out.trick && pauseMs > 0 && !out.handDone) {
       // The hand goes on: show the finished trick (and its winner) for a moment, but let the winner lead at once.
@@ -389,6 +415,7 @@ export class Table {
     this.clearTimer();
     this.hooks.changed();
     const g = this.game as GameState;
+    if (g.winner !== null && !forfeit) this.botChat.onGameEnd(g.winner);
     if (this.tournament && this.hooks.matchOver) {
       const winner = g.winner as Team;
       const wait = this.fastForward || forfeit ? Math.min(this.timings.matchEndPauseMs, forfeit ? 2000 : 0) : this.timings.matchEndPauseMs;
@@ -443,7 +470,9 @@ export class Table {
     const s = this.seats[seat];
     try {
       if (g.phase === 'bidding') {
-        placeBid(g, seat, chooseBid(g, seat));
+        const bid = chooseBid(g, seat);
+        placeBid(g, seat, bid);
+        if (s.kind === 'bot') this.botChat.onBid(seat, bid);
         if (s.kind === 'human') s.botActed = true;
         this.broadcast();
         this.advance();
@@ -584,6 +613,7 @@ export class Table {
       seats: this.seats.map((s, i) => ({
         kind: s.kind,
         name: s.name,
+        face: s.kind === 'bot' ? s.face : undefined,
         connected: s.kind === 'human' ? s.connected : true,
         botControlled: s.kind === 'human' && s.botControlled,
         cards: g ? g.hands[i].length : 0,
@@ -637,14 +667,24 @@ export class Table {
   /** Post a (pre-sanitized) message from a seated player or a watcher and send it to everyone at the table. */
   postChat(pid: string, name: string, text: string): boolean {
     if (this.dead || !this.hasPerson(pid)) return false;
-    const line: ChatLine = { from: name, role: this.seatOf(pid) >= 0 ? 'player' : 'watcher', text, ts: Date.now(), by: pid };
+    this.pushChat({ from: name, role: this.seatOf(pid) >= 0 ? 'player' : 'watcher', text, ts: Date.now(), by: pid });
+    this.botChat.onHumanChat(name, text);
+    return true;
+  }
+
+  /** A bot says something at the table (see botchat.ts). */
+  private postBotChat(seat: number, name: string, text: string): void {
+    if (this.dead || this.seats[seat]?.kind !== 'bot' || this.seats[seat].name !== name) return;
+    this.pushChat({ from: name, role: 'player', text, ts: Date.now(), by: `bot:${seat}` });
+  }
+
+  private pushChat(line: ChatLine): void {
     this.chat.push(line);
     if (this.chat.length > CONFIG.chat.history) this.chat.splice(0, this.chat.length - CONFIG.chat.history);
     for (const s of this.seats) {
       if (s.kind === 'human' && s.connected) this.hooks.send(s.playerId as string, { t: 'chatMsg', table: this.id, ...this.chatOut(line, s.playerId as string) });
     }
     for (const w of this.watchers) this.hooks.send(w, { t: 'chatMsg', table: this.id, ...this.chatOut(line, w) });
-    return true;
   }
 
   // ---------- teardown ----------
@@ -658,6 +698,7 @@ export class Table {
 
   dispose(): void {
     this.dead = true;
+    this.botChat.stop();
     this.chat = [];
     this.chatSent.clear();
     for (const t of [this.timer, this.pauseTimer, this.collectTimer, this.idleTimer, this.endTimer]) if (t) clearTimeout(t);

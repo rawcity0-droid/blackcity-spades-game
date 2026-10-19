@@ -347,10 +347,17 @@ function pickPhoto(file, done) {
   fr.readAsDataURL(file);
 }
 
+/** A bot's photo from the server's table view (an id like "marcus"); nothing is shown for an unknown id. */
+function facePhoto(face) {
+  if (!/^[a-z0-9]{1,20}$/.test(face || '')) return null;
+  return h('img', { src: `/faces/${face}.jpg`, alt: '', loading: 'lazy', draggable: 'false' });
+}
+
 /** Round avatar: the first letter of a name, or the local profile photo for "me". */
-function avatar(name, { me = false, cls = '' } = {}) {
+function avatar(name, { me = false, cls = '', face = '' } = {}) {
   const el = h('div', { class: 'avatar ' + cls });
   if (me && state.avatar) el.append(h('img', { src: state.avatar, alt: '' }));
+  else if (facePhoto(face)) el.append(facePhoto(face));
   else el.textContent = (name || '?').trim().slice(0, 1).toUpperCase() || '?';
   return el;
 }
@@ -915,7 +922,7 @@ function pill(t, i, pos) {
   const winner = t && ((t.collect && t.collect.winner === i) || (t.trickWinner !== null && t.trickWinner !== undefined && t.trickWinner === i));
   const dealer = idle ? pos === 'e' : t.dealer === i && t.phase !== 'waiting';
   return h('div', { class: `pill ${pos}${t && t.turn === i ? ' turn' : ''}${me ? ' me' : ''}${s.kind === 'empty' ? ' empty' : ''}${winner ? ' trickwin' : ''}`, 'data-seat': i },
-    avatar(name, { me: me || (idle && pos === 's') }),
+    avatar(name, { me: me || (idle && pos === 's'), face: s.face }),
     h('div', { class: 'ptext' }, h('div', { class: 'pname', text: name }), stat),
     dealer ? h('span', { class: 'dbadge', title: 'Dealer', text: 'D' }) : null);
 }
@@ -1097,7 +1104,9 @@ function seatCard(t, i) {
   const isMe = i === t.mySeat;
   const initials = filled ? s.name.trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() : String(i + 1);
   const circle = h('div', { class: 'avatar sm' });
-  if (isMe && state.avatar) circle.append(h('img', { src: state.avatar, alt: '' })); else circle.textContent = initials;
+  if (isMe && state.avatar) circle.append(h('img', { src: state.avatar, alt: '' }));
+  else if (filled && facePhoto(s.face)) circle.append(facePhoto(s.face));
+  else circle.textContent = initials;
   const label = `Team ${team + 1} · Position ${pos}${isMe ? ' · You' : s.kind === 'bot' ? ' · Bot' : ''}`;
   return h('div', { class: 'seatcard' + (filled ? '' : ' vacant') }, circle,
     h('div', { class: 'sc-text' }, h('b', { text: filled ? s.name : 'Open seat' }), h('span', { text: label })));

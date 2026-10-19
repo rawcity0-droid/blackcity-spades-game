@@ -60,6 +60,8 @@ export const CONFIG = {
   //   playWithOthersNeedsInvite: a free user cannot create a table with others, quick-match into other people's tables or join by
   //     table id from the lobby; they can only join by code, and only when the table's host is a current Premium member.
   //     Set false to let free users create / join public tables like before.
+  /** Bot seats: some get a face photo (public/faces/<id>.jpg); "Raw 1" shows up often. */
+  botFaces: { chance: 0.45, rawOneChance: 0.2 },
   freeRandomMatch: true, // see above: free Quick play = random-match queue (bots fill empty seats after timing.matchWaitMs); false = solo vs bots
   hostOnly: { privateTables: true, hostTournaments: true, playWithOthersNeedsInvite: true },
 
@@ -88,6 +90,7 @@ export const CONFIG = {
     abandonMs: 60000,       // tournament table: forfeit/fast-forward after this long without humans
     matchEndPauseMs: 7000,  // show the game-over screen before returning to the bracket
     seatHoldMs: 120000,     // a disconnected human's seat can be released to a waiting player after this
+    botChatPace: 1,         // bots talk in the table chat; 1 = normal speed, 0 = bots stay quiet (tests), small numbers speed it up
     matchWaitMs: 10000,     // Play now for a free player: wait this long for other random players, then bots fill the empty seats
   },
 } as const;
