@@ -8,7 +8,7 @@ import {
   CompletedTrick, EngineError, GameState, Team, createGame, legalPlays, nextHand, placeBid, playCard,
   teamOf, PlayOutcome,
 } from '../engine/game.js';
-import { chooseBid, choosePlay } from '../engine/bot.js';
+import { Skill, chooseBid, choosePlay } from '../engine/bot.js';
 import { BotChat } from './botchat.js';
 
 export type SeatKind = 'empty' | 'bot' | 'human';
@@ -24,7 +24,11 @@ export interface SeatInfo {
   disconnectedAt: number | null;
   ready: boolean;
   face?: string;            // bots only: id of a profile photo in public/faces
+  chatStyle?: ChatStyle;    // bots only: 'trash' bots talk more smack in the chat
+  skill?: Skill;            // bots only: 'strong' bots play better (src/engine/bot.ts)
 }
+
+export type ChatStyle = 'chill' | 'trash';
 
 export type Timings = { -readonly [K in keyof typeof CONFIG.timing]: number };
 export const defaultTimings = (): Timings => ({ ...CONFIG.timing });
@@ -141,7 +145,7 @@ export class Table {
     this.rng = init.rng ?? secureRng;
     this.botChat = new BotChat({
       rng: this.rng,
-      bots: () => this.seats.map((s, i) => ({ seat: i, name: s.name, kind: s.kind })).filter((b) => b.kind === 'bot'),
+      bots: () => this.seats.map((s, i) => ({ seat: i, name: s.name, kind: s.kind, trash: s.chatStyle === 'trash' })).filter((b) => b.kind === 'bot'),
       humans: () => this.seats.map((s, i) => ({ seat: i, name: s.name, kind: s.kind, on: s.connected })).filter((h) => h.kind === 'human' && h.on),
       say: (seat, name, text) => this.postBotChat(seat, name, text),
       playing: () => this.status === 'playing',
@@ -170,13 +174,15 @@ export class Table {
   }
 
   /** Pick a name (and sometimes a photo) for a new bot: never one already at this table. */
-  private botPersona(): { name: string; face?: string } {
+  private botPersona(): { name: string; face?: string; chatStyle: ChatStyle; skill: Skill } {
+    const chatStyle: ChatStyle = this.rng() < CONFIG.botPersonality.trashChance ? 'trash' : 'chill';
+    const skill: Skill = this.rng() < CONFIG.botPersonality.strongChance ? 'strong' : 'normal';
     const used = new Set(this.seats.map((s) => s.name));
-    if (!used.has(RAW_ONE.name) && this.rng() < CONFIG.botFaces.rawOneChance) return RAW_ONE;
+    if (!used.has(RAW_ONE.name) && this.rng() < CONFIG.botFaces.rawOneChance) return { ...RAW_ONE, chatStyle, skill };
     const faces = FACE_BOTS.filter((f) => !used.has(f.name));
-    if (faces.length && this.rng() < CONFIG.botFaces.chance) return faces[Math.floor(this.rng() * faces.length)];
+    if (faces.length && this.rng() < CONFIG.botFaces.chance) return { ...faces[Math.floor(this.rng() * faces.length)], chatStyle, skill };
     const free = BOT_NAMES.filter((n) => !used.has(n));
-    return { name: free.length ? free[Math.floor(this.rng() * free.length)] : 'Bot' };
+    return { name: free.length ? free[Math.floor(this.rng() * free.length)] : 'Bot', chatStyle, skill };
   }
 
   /** Put a human directly in a seat (used for tournament match setup and by sit()). */
@@ -381,7 +387,11 @@ export class Table {
   }
 
   private afterPlay(out: PlayOutcome): void {
-    if (out.trick) this.botChat.onTrick(out.trick.winner);
+    if (out.trick) {
+      const w = out.trick.winner;
+      const nilBust = this.game?.bids[w] === 0 && this.game.tricksWon[w] === 1; // a Nil bid just took its first trick
+      this.botChat.onTrick(w, nilBust);
+    }
     if (out.handDone && this.game?.lastHand) { const r = this.game.lastHand.teams; this.botChat.onHandEnd([r[0].made, r[1].made]); }
     const pauseMs = this.fastForward ? 0 : this.timings.trickPauseMs;
     if (out.trick && pauseMs > 0 && !out.handDone) {
@@ -462,6 +472,12 @@ export class Table {
     this.timer = setTimeout(() => this.botMove(), delay);
   }
 
+  /** Seat's bot skill: a seated bot's own skill; a bot standing in for a person plays normally. */
+  private skillOf(seat: number): Skill {
+    const s = this.seats[seat];
+    return s.kind === 'bot' ? s.skill ?? 'normal' : 'normal';
+  }
+
   private botMove(): void {
     this.timer = null;
     const g = this.game;
@@ -470,14 +486,14 @@ export class Table {
     const s = this.seats[seat];
     try {
       if (g.phase === 'bidding') {
-        const bid = chooseBid(g, seat);
+        const bid = chooseBid(g, seat, this.skillOf(seat));
         placeBid(g, seat, bid);
         if (s.kind === 'bot') this.botChat.onBid(seat, bid);
         if (s.kind === 'human') s.botActed = true;
         this.broadcast();
         this.advance();
       } else if (g.phase === 'playing') {
-        const out = playCard(g, seat, choosePlay(g, seat));
+        const out = playCard(g, seat, choosePlay(g, seat, this.skillOf(seat)));
         if (s.kind === 'human') s.botActed = true;
         this.afterPlay(out);
       }

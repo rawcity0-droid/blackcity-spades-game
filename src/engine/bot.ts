@@ -8,7 +8,10 @@ import { GameState, beats, legalBids, legalPlays, partnerOf, teamOf } from './ga
 const ACE = 12, KING = 11, QUEEN = 10, TEN = 8;
 
 /** Estimate how many tricks a hand will take and turn it into a bid: CONFIG.rules.minBid..maxBid, or 0 = nil for a very weak hand when Nil is allowed. */
-export function chooseBid(g: GameState, seat: number): number {
+/** How well a bot plays: 'normal' is the plain heuristic, 'strong' also counts cards, reads voids and plays around Nil bids. */
+export type Skill = 'normal' | 'strong';
+
+export function chooseBid(g: GameState, seat: number, skill: Skill = 'normal'): number {
   const hand = g.hands[seat];
   const bySuit = (s: string) => hand.filter((c) => suitOf(c) === s);
   const spades = bySuit('S');
@@ -41,6 +44,7 @@ export function chooseBid(g: GameState, seat: number): number {
   const highSpade = spades.some((c) => rankOf(c) >= TEN);
   const highCards = hand.filter((c) => rankOf(c) >= KING).length;
   const partnerBid = g.bids[partnerOf(seat)];
+  if (skill === 'strong') return strongBid(g, seat, est, spades.length, highSpade);
   if (CONFIG.rules.allowNil && est < 1.1 && spades.length <= 2 && !highSpade && highCards <= 1 && partnerBid !== 0 && legalBids(g, seat).includes(0)) return 0;
 
   const want = Math.max(CONFIG.rules.minBid, Math.min(CONFIG.rules.maxBid, Math.round(est)));
@@ -72,11 +76,16 @@ function currentWinner(g: GameState): { seat: number; card: Card } {
   return best;
 }
 
-export function choosePlay(g: GameState, seat: number): Card {
+export function choosePlay(g: GameState, seat: number, skill: Skill = 'normal'): Card {
   const legal = legalPlays(g, seat);
   if (legal.length === 0) throw new Error('Bot has no legal play');
   if (legal.length === 1) return legal[0];
+  if (skill === 'strong') return strongPlay(g, seat, legal);
+  return normalPlay(g, seat, legal);
+}
 
+/** The plain heuristic (normal bots, and the fallback for strong bots). */
+function normalPlay(g: GameState, seat: number, legal: Card[]): Card {
   const partner = partnerOf(seat);
   const iAmNil = g.bids[seat] === 0;
   const partnerNilAlive = g.bids[partner] === 0 && g.tricksWon[partner] === 0;
@@ -139,3 +148,123 @@ export function choosePlay(g: GameState, seat: number): Card {
   return cheapDump();
 }
 
+
+// ======================= strong bots =======================
+// Same inputs as the normal bot (own hand + public table state), but they remember every card played this hand.
+
+function bidFrom(g: GameState, seat: number, want: number): number {
+  want = Math.max(CONFIG.rules.minBid, Math.min(CONFIG.rules.maxBid, want));
+  const legal = legalBids(g, seat).filter((b) => b > 0 || want === 0);
+  return legal.includes(want) ? want : legal.filter((b) => b >= want)[0] ?? legal[legal.length - 1];
+}
+
+/** Strong bots bid Nil a bit more often on weak hands (the +100 is worth it) and otherwise bid their estimate. Tuned with scripts/sim-strong.ts. */
+function strongBid(g: GameState, seat: number, est: number, spadeCount: number, highSpade: boolean): number {
+  const hand = g.hands[seat];
+  const partnerBid = g.bids[partnerOf(seat)];
+  const highCards = hand.filter((c) => rankOf(c) >= KING).length;
+  if (CONFIG.rules.allowNil && est < 1.8 && spadeCount <= 3 && !highSpade && highCards <= 1 && partnerBid !== 0 && legalBids(g, seat).includes(0)) return 0;
+  return bidFrom(g, seat, Math.round(est));
+}
+
+/** Cards nobody can see yet from this seat: not in my hand, not played this hand, not on the table. */
+function unseenCards(g: GameState, seat: number): Set<Card> {
+  const known = new Set<Card>(g.hands[seat]);
+  for (const t of g.played ?? []) for (const p of t) known.add(p.card);
+  for (const p of g.trick) known.add(p.card);
+  const out = new Set<Card>();
+  for (const s of ['S', 'H', 'D', 'C']) for (const r of '23456789TJQKA') if (!known.has(r + s)) out.add(r + s);
+  return out;
+}
+
+/** Suits each seat has shown it has none of (failed to follow). */
+function voids(g: GameState): Set<string>[] {
+  const v = [0, 1, 2, 3].map(() => new Set<string>());
+  for (const t of [...(g.played ?? []), g.trick]) {
+    if (!t.length) continue;
+    const lead = suitOf(t[0].card);
+    for (const p of t.slice(1)) if (suitOf(p.card) !== lead) v[p.seat].add(lead);
+  }
+  return v;
+}
+
+/** No unseen card of the same suit outranks this card. */
+function isTop(card: Card, unseen: Set<Card>): boolean {
+  for (const c of unseen) if (suitOf(c) === suitOf(card) && rankOf(c) > rankOf(card)) return false;
+  return true;
+}
+
+function strongPlay(g: GameState, seat: number, legal: Card[]): Card {
+  const partner = partnerOf(seat);
+  const opps = [(seat + 1) % 4, (seat + 3) % 4];
+  const unseen = unseenCards(g, seat);
+  const vd = voids(g);
+  const spadesOut = [...unseen].some((c) => suitOf(c) === 'S');
+  const iAmNil = g.bids[seat] === 0;
+  const partnerNilAlive = g.bids[partner] === 0 && g.tricksWon[partner] === 0;
+  const oppNil = opps.filter((o) => g.bids[o] === 0 && g.tricksWon[o] === 0);
+  const wantTricks = tricksStillNeeded(g, seat) > 0;
+  const nonSpades = legal.filter((c) => suitOf(c) !== 'S');
+
+  // ---- leading ----
+  if (g.trick.length === 0) {
+    if (!iAmNil && (wantTricks || partnerNilAlive)) {
+      // Don't lead a king into an unseen ace: lead low instead
+      const plan = normalPlay(g, seat, legal);
+      if (suitOf(plan) !== 'S' && !isTop(plan, unseen) && rankOf(plan) >= QUEEN && !partnerNilAlive) return lowest(nonSpades.length ? nonSpades : legal);
+      return plan;
+    }
+    if (!iAmNil && oppNil.length && !partnerNilAlive) {
+      // Hunt the Nil: lead low in a suit the Nil player still holds
+      const pool = legal.filter((c) => !vd[oppNil[0]].has(suitOf(c)));
+      if (pool.length) return lowest(pool);
+    }
+    return normalPlay(g, seat, legal);
+  }
+
+  // ---- following ----
+  const leadSuit = suitOf(g.trick[0].card);
+  const win = currentWinner(g);
+  const canFollow = legal.some((c) => suitOf(c) === leadSuit);
+  const winners = legal.filter((c) => beats(c, win.card));
+  const under = legal.filter((c) => !beats(c, win.card));
+  const toPlay = [1, 2, 3].slice(0, 3 - g.trick.length).map((k) => (seat + k) % 4);
+  /** Would this card still be winning after everybody else plays? (partner doesn't count as a threat) */
+  const holds = (c: Card) => toPlay.every((s) => {
+    if (s === partner) return true;
+    if (suitOf(c) === 'S') return isTop(c, unseen) || (vd[s].has('S'));
+    if (vd[s].has(leadSuit)) return vd[s].has('S') || !spadesOut;
+    return isTop(c, unseen);
+  });
+
+  if (iAmNil) {
+    if (under.length) return highest(under);
+    if (!canFollow) return highest(nonSpades.length ? nonSpades : legal); // forced to discard: shed the most dangerous card
+    return lowest(legal);
+  }
+
+  // An opponent's Nil is winning this trick: stay under it if we can (only when our own bid doesn't need this trick)
+  if (oppNil.includes(win.seat) && under.length && (!wantTricks || toPlay.length > 0)) {
+    return canFollow ? highest(under) : highest(under.filter((c) => suitOf(c) !== 'S').length ? under.filter((c) => suitOf(c) !== 'S') : under);
+  }
+
+  if (!partnerNilAlive && win.seat === partner && holds(win.card)) {
+    // Partner has it won: never overtake, just throw the cheapest card
+    if (canFollow) return lowest(legal);
+    return lowest(nonSpades.length ? nonSpades : legal);
+  }
+
+  if (wantTricks && winners.length) {
+    const sure = winners.filter(holds);
+    if (sure.length) return lowest(sure);
+  }
+
+  if (!wantTricks && !partnerNilAlive && under.length) {
+    // Contract is safe: avoid bags. Duck as high as possible; if not following, shed high side cards.
+    if (canFollow) return highest(under);
+    const side = under.filter((c) => suitOf(c) !== 'S');
+    return highest(side.length ? side : under);
+  }
+
+  return normalPlay(g, seat, legal);
+}

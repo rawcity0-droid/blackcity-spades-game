@@ -373,3 +373,9 @@ real client IP (rate limiting is per connection today), and backups of `data/`.
 - Bots talk in the table chat (`src/server/botchat.ts`): hellos, short back-and-forth conversations between two bots, reactions to big bids, Nil, tricks,
   sets and the final score, and replies when a person writes. Speed comes from `CONFIG.timing.botChatPace` (1 = normal, 0 = silent; tests use 0).
   If asked whether they are bots they joke and change the subject; they never claim to be human.
+- Personalities (`CONFIG.botPersonality`, picked when a bot sits down, never sent to clients): about a third of bots are trash talkers
+  (`chatStyle: 'trash'`) who also use the clean card-table smack in `TRASH_LINES` (taunts on sets, Nil busts, big bids and tricks, light roasting);
+  the rest stay chill. About a third are strong players (`skill: 'strong'` in `src/engine/bot.ts`): they remember every card played this hand
+  (`GameState.played`), read voids, never overtake a partner who already has the trick, duck under an opponent's Nil, shed high cards when their own
+  Nil is in danger, avoid bags once the bid is made and bid Nil a bit more often on weak hands. `npx tsx scripts/sim-strong.ts 1000 500` plays
+  strong vs normal teams (sides swapped every game); strong won about 60%. Tournament bot-only matches and bots covering for people play normally.

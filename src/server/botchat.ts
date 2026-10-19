@@ -7,7 +7,7 @@ import { Rng } from '../engine/cards.js';
 export interface BotChatHost {
   rng: Rng;
   /** Bots currently seated at the table. */
-  bots(): { seat: number; name: string }[];
+  bots(): Bot[];
   /** First names of the people seated at the table who are connected. */
   humans(): { seat: number; name: string }[];
   say(seat: number, name: string, text: string): void;
@@ -15,7 +15,8 @@ export interface BotChatHost {
   playing(): boolean;
 }
 
-type Bot = { seat: number; name: string };
+/** trash: this bot is a trash talker (uses the TRASH_* lines on top of the friendly ones). */
+type Bot = { seat: number; name: string; trash?: boolean };
 
 /** Talks that run for a few lines, alternating between two (or three) bots. {H} is a player's name, {B} the other bot's name. */
 const THREADS: string[][] = [
@@ -63,6 +64,20 @@ const MADE = ['That’s how it’s done', 'Made it, nice', 'Books are in', 'Smoo
 const GAME_WIN = ['gg everybody, that was fun', 'Good game, y’all', 'That’s the game, great playing', 'We got that one, good game'];
 const GAME_LOSE = ['Well played, gg', 'You got us, good game', 'Okay, okay, good game, run it back', 'Nice game, y’all earned that one'];
 
+// ---- trash talk: only bots with chatStyle 'trash' use these. Card-table smack only: clean, no insults about who people are. ----
+/** Exported so tests can check that only trash talkers use them. */
+export const TRASH_LINES = {
+  bigBid: ['{N}? You sure about that? I got a spade for every one of those', '{N} books? Bold. Wrong, but bold', 'Bidding {N} with that hand? I’ll be watching', '{N}?! Somebody call the bank, you’re writing checks you can’t cash'],
+  nil: ['Nil? Oh this is gonna be fun for me', 'Nil? I’m coming for you, no hiding', 'You went Nil? I hope you like eating books', 'Nil with those cards? Brave. Real brave'],
+  nilBust: ['Nil busted! Thank you, come again 😂', 'There goes the Nil. Should’ve bid 2', 'Caught you! Nil is officially dead', 'That Nil lasted about as long as my patience'],
+  win: ['Sit down', 'Mine. Again', 'Take notes', 'Too easy', 'You can’t hang with this', 'That’s called skill'],
+  set: ['Set! Write that down 😂', 'Y’all got SET. Who taught you to bid?', 'Overbid and underdelivered', 'Set like a dinner table', 'Books don’t lie, y’all were short'],
+  roast: ['I’ve seen better hands at a car wash', 'Y’all playing spades or go fish?', 'Somebody at this table is scared of their own spades', 'I could play this hand with my eyes closed', 'Don’t worry, losing builds character', 'Is this your first time? Be honest', 'My grandma bids better than this, and she’s been retired since ’98'],
+  gameWin: ['Run it back if you want another lesson', 'gg, put some respect on my name', 'That’s game. Y’all can take notes on the way out', 'Easy money. gg though'],
+  gameLose: ['Lucky cards, that’s all that was', 'Alright, you got me. Don’t get used to it', 'Run it back, that was a warm-up'],
+  back: ['Talk is cheap, books are expensive', 'Keep talking, I’ll keep taking books', 'You talk a lot for somebody who’s losing', 'Cute. Now play a card', 'Say less, play more'],
+};
+
 const MIN_GAP_MS = 6000;      // between reactions from different triggers
 const CONVO_LIMIT = 200;      // chat message length cap (matches CONFIG.chat.maxChars)
 
@@ -105,13 +120,21 @@ export class BotChat {
   onBid(seat: number, bid: number): void {
     if (!this.ready() || this.cooling()) return;
     const bots = this.host.bots();
-    if (bid === 0 && this.chance(0.7)) return this.sayOne(this.pickOther(bots, seat), NIL);
-    if (bid >= 7 && this.chance(0.5)) return this.sayOne(this.pickOther(bots, seat), BIG_BID, { N: String(bid) });
+    const trash = this.trashOpponent(seat);
+    if (bid === 0 && this.chance(0.7)) return trash ? this.sayAs(trash, TRASH_LINES.nil) : this.sayOne(this.pickOther(bots, seat), NIL);
+    if (bid >= 7 && this.chance(0.5)) return trash ? this.sayAs(trash, TRASH_LINES.bigBid, { N: String(bid) }) : this.sayOne(this.pickOther(bots, seat), BIG_BID, { N: String(bid) });
   }
 
-  onTrick(winner: number): void {
-    if (!this.ready() || this.cooling()) return;
+  /** nilBust: the winner had bid Nil and this was their first trick. */
+  onTrick(winner: number, nilBust = false): void {
+    if (!this.ready()) return;
+    if (nilBust) {
+      const trash = this.trashOpponent(winner);
+      if (trash && this.chance(0.8)) return this.sayAs(trash, TRASH_LINES.nilBust);
+    }
+    if (this.cooling()) return;
     const bot = this.host.bots().find((b) => b.seat === winner);
+    if (bot?.trash && this.chance(0.18)) return this.sayAs(bot, TRASH_LINES.win);
     if (bot && this.chance(0.1)) return this.sayAs(bot, WIN_TRICK);
     const human = this.host.humans().find((h) => h.seat === winner);
     if (human && this.chance(0.15)) return this.sayOne(this.pickOther(this.host.bots(), winner), HUMAN_WIN_TRICK, { H: human.name });
@@ -125,6 +148,9 @@ export class BotChat {
     const bot = bots[Math.floor(this.host.rng() * bots.length)];
     const team = bot.seat % 2;
     const mine = teamsMade[team];
+    // A trash talker whose team made it while the other team got set rubs it in
+    const gloater = bots.find((b) => b.trash && teamsMade[b.seat % 2] !== false && teamsMade[(b.seat + 1) % 2] === false);
+    if (gloater && this.chance(0.8)) return this.sayAs(gloater, TRASH_LINES.set);
     if (mine === false) return this.sayAs(bot, SET);
     if (mine === true) return this.sayAs(bot, MADE);
   }
@@ -134,7 +160,9 @@ export class BotChat {
     const bots = this.host.bots();
     if (!bots.length) return;
     const bot = bots[Math.floor(this.host.rng() * bots.length)];
-    this.later(1500 + this.rand(2500), () => this.sayAs(bot, bot.seat % 2 === winnerTeam ? GAME_WIN : GAME_LOSE, { H: this.firstHuman() }));
+    const won = bot.seat % 2 === winnerTeam;
+    const pool = bot.trash ? (won ? TRASH_LINES.gameWin : TRASH_LINES.gameLose) : won ? GAME_WIN : GAME_LOSE;
+    this.later(1500 + this.rand(2500), () => this.sayAs(bot, pool, { H: this.firstHuman() }));
   }
 
   /** A person wrote in the chat: one bot answers, sometimes a second one joins in. */
@@ -145,7 +173,8 @@ export class BotChat {
     const lower = text.toLowerCase();
     const named = bots.find((b) => lower.includes(b.name.toLowerCase()));
     const first = named ?? bots[Math.floor(this.host.rng() * bots.length)];
-    const pool = this.replyPool(lower);
+    let pool = this.replyPool(lower);
+    if (first.trash && (pool === TRASH_BACK || pool === GENERIC_BACK) && this.chance(0.6)) pool = TRASH_LINES.back;
     if (!this.chance(0.9)) return;
     this.later(1800 + this.rand(3200), () => this.sayAs(first, pool, { H: fromName }));
     const others = bots.filter((b) => b.seat !== first.seat);
@@ -197,7 +226,10 @@ export class BotChat {
     if (this.ready() && this.host.playing() && Date.now() >= this.convoUntil && !this.cooling()) {
       if (this.chance(0.6)) this.startThread(); else {
         const bots = this.host.bots();
-        if (bots.length) this.sayAs(bots[Math.floor(this.host.rng() * bots.length)], QUIPS);
+        if (bots.length) {
+          const b = bots[Math.floor(this.host.rng() * bots.length)];
+          this.sayAs(b, b.trash && this.chance(0.6) ? TRASH_LINES.roast : QUIPS);
+        }
       }
     }
     this.armAmbient();
@@ -231,6 +263,12 @@ export class BotChat {
   private chance(p: number): boolean { return this.host.rng() < p; }
   private rand(n: number): number { return Math.floor(this.host.rng() * n); }
   private firstHuman(): string { return this.host.humans()[0]?.name ?? 'friend'; }
+
+  /** A trash-talking bot on the other team from this seat, if one is seated. */
+  private trashOpponent(seat: number): Bot | null {
+    const list = this.host.bots().filter((b) => b.trash && b.seat % 2 !== seat % 2);
+    return list.length ? list[Math.floor(this.host.rng() * list.length)] : null;
+  }
 
   private pickOther(bots: Bot[], seat: number): Bot | null {
     const others = bots.filter((b) => b.seat !== seat);

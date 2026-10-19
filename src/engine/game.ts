@@ -57,6 +57,8 @@ export interface GameState {
   bids: (number | null)[];
   trick: TrickPlay[];
   lastTrick: CompletedTrick | null;
+  /** Tricks completed so far in this hand (public information; strong bots use it to count cards and spot voids). */
+  played: TrickPlay[][];
   tricksWon: number[];
   spadesBroken: boolean;
   scores: [number, number];
@@ -82,6 +84,7 @@ export function createGame(opts: GameOptions = {}): GameState {
     bids: [null, null, null, null],
     trick: [],
     lastTrick: null,
+    played: [],
     tricksWon: [0, 0, 0, 0],
     spadesBroken: false,
     scores: [0, 0],
@@ -99,6 +102,7 @@ function dealNewHand(g: GameState): void {
   g.bids = [null, null, null, null];
   g.trick = [];
   g.lastTrick = null;
+  g.played = [];
   g.tricksWon = [0, 0, 0, 0];
   g.spadesBroken = false;
   g.phase = 'bidding';
@@ -200,6 +204,7 @@ export function playCard(g: GameState, seat: number, card: Card): PlayOutcome {
   const winner = trickWinner(g.trick);
   const done: CompletedTrick = { plays: g.trick, winner };
   g.lastTrick = done;
+  g.played.push(g.trick);
   g.tricksWon[winner] += 1;
   g.trick = [];
   g.turn = winner;

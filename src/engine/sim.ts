@@ -2,7 +2,7 @@
 
 import { Rng, secureRng } from './cards.js';
 import { GameState, Team, createGame, nextHand, placeBid, playCard } from './game.js';
-import { chooseBid, choosePlay } from './bot.js';
+import { Skill, chooseBid, choosePlay } from './bot.js';
 
 export interface SimResult {
   winner: Team;
@@ -12,16 +12,17 @@ export interface SimResult {
 }
 
 /** Advance a game one step using bots for every seat. Returns false when the game is over. */
-export function botStep(g: GameState): boolean {
+export function botStep(g: GameState, skills?: Skill[]): boolean {
+  const skill = skills?.[g.turn] ?? 'normal';
   switch (g.phase) {
-    case 'bidding': placeBid(g, g.turn, chooseBid(g, g.turn)); return true;
-    case 'playing': playCard(g, g.turn, choosePlay(g, g.turn)); return true;
+    case 'bidding': placeBid(g, g.turn, chooseBid(g, g.turn, skill)); return true;
+    case 'playing': playCard(g, g.turn, choosePlay(g, g.turn, skill)); return true;
     case 'handOver': nextHand(g); return true;
     default: return false;
   }
 }
 
-export function simulateGame(opts: { target: number; rng?: Rng; maxHands?: number; breakRule?: boolean; sandbags?: boolean }): SimResult {
+export function simulateGame(opts: { target: number; rng?: Rng; maxHands?: number; breakRule?: boolean; sandbags?: boolean; skills?: Skill[] }): SimResult {
   const g = createGame({ target: opts.target, rng: opts.rng ?? secureRng, dealer: 0, breakRule: opts.breakRule, sandbags: opts.sandbags });
   const cap = opts.maxHands ?? 300;
   while (g.phase !== 'gameOver') {
@@ -29,7 +30,7 @@ export function simulateGame(opts: { target: number; rng?: Rng; maxHands?: numbe
       // Extremely unlikely: break the deadlock by score (ties go to team 0)
       return { winner: g.scores[1] > g.scores[0] ? 1 : 0, scores: g.scores, hands: g.handNo, capped: true };
     }
-    botStep(g);
+    botStep(g, opts.skills);
   }
   return { winner: g.winner as Team, scores: g.scores, hands: g.handNo, capped: false };
 }
