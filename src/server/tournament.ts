@@ -39,6 +39,8 @@ export interface TournamentInit {
   code: string;
   size: number;
   organizerId: string;
+  /** Premium host's bidding rule for every table this opens: true = partners must bid at least CONFIG.rules.premiumTeamMin together. Default true. */
+  teamMin4?: boolean;
   isPublic: boolean;
   host: TournamentHost;
   rng?: Rng;
@@ -54,6 +56,7 @@ export class Tournament {
   readonly code: string;
   readonly size: number;
   readonly organizerId: string;
+  readonly teamMin4: boolean;
   readonly isPublic: boolean;
   readonly createdAt = Date.now();
   state: TState = 'registering';
@@ -71,6 +74,7 @@ export class Tournament {
     this.code = init.code;
     this.size = init.size;
     this.organizerId = init.organizerId;
+    this.teamMin4 = init.teamMin4 !== false;
     this.isPublic = init.isPublic;
     this.host = init.host;
     this.rng = init.rng ?? secureRng;
@@ -229,6 +233,7 @@ export class Tournament {
       size: this.size,
       state: this.state,
       isPublic: this.isPublic,
+      teamMin: this.teamMin4 ? CONFIG.rules.premiumTeamMin : 0,
       isOrganizer: pid === this.organizerId,
       joined: this.hasPlayer(pid),
       capacity: this.maxEntrants,

@@ -379,3 +379,10 @@ real client IP (rate limiting is per connection today), and backups of `data/`.
   (`GameState.played`), read voids, never overtake a partner who already has the trick, duck under an opponent's Nil, shed high cards when their own
   Nil is in danger, avoid bags once the bid is made and bid Nil a bit more often on weak hands. `npx tsx scripts/sim-strong.ts 1000 500` plays
   strong vs normal teams (sides swapped every game); strong won about 60%. Tournament bot-only matches and bots covering for people play normally.
+
+## Bidding rule for Premium hosts
+
+Premium hosts pick the bidding rule: **Team min 4** (default; partners must bid at least `CONFIG.rules.premiumTeamMin` together) or **Regular bidding**
+(no minimum). Clients send `teamMin4` (boolean, missing = true) on `createTable`, `createTournament` and `createEvent`; a hosted table's host can also
+flip it with `setRules { teamMin4 }` in the table lobby before the game starts. Tournament and event tables all use the organizer's choice, and their
+views carry `teamMin` for the label. Free Play now (quick) and practice tables always use regular bidding; Premium "Quick play at a public table" is unchanged (team min 4).

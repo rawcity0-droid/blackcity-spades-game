@@ -108,7 +108,7 @@ export class Table {
   readonly creatorId: string | null;
   readonly practice: boolean;
   readonly quick: boolean;
-  readonly teamMin: number;
+  teamMin: number;
   seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
   watchers = new Set<string>();
   waiters: string[] = [];                 // watchers who asked for a seat; seated between hands
@@ -290,7 +290,7 @@ export class Table {
   }
 
   /** Host only, before the game starts: change target / break rule / sandbags. */
-  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean }): Result {
+  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean }): Result {
     if (this.status !== 'waiting') return fail('wrong_state', 'Rules can only be changed before the game starts');
     if (pid !== this.hostId) return fail('not_allowed', 'Only the host can change the rules');
     if (patch.target !== undefined) {
@@ -299,6 +299,8 @@ export class Table {
     }
     if (patch.breakRule !== undefined) this.breakRule = patch.breakRule;
     if (patch.sandbags !== undefined) this.sandbags = patch.sandbags;
+    // Bidding rule (Premium-hosted tables only; Play now / quick and practice tables always use regular bidding)
+    if (patch.teamMin4 !== undefined && !this.quick && !this.practice) this.teamMin = patch.teamMin4 ? CONFIG.rules.premiumTeamMin : 0;
     this.broadcast();
     this.hooks.changed();
     return { ok: true };

@@ -628,7 +628,7 @@ function fillOpenTables() {
 function createTable() {
   if (!requireName(refs.nameInput)) return;
   closeModal('play');
-  send({ t: 'createTable', isPublic: false, target: (state.config && state.config.defaultTarget) || 500 });
+  send({ t: 'createTable', isPublic: false, target: (state.config && state.config.defaultTarget) || 500, teamMin4: true }); // the host can switch to regular bidding in the table lobby
 }
 
 function openCodeModal(kind, prefill = '') {
@@ -664,7 +664,7 @@ function openEventModal() {
   closeModal('play');
   const cfg = state.config || {};
   const opts = cfg.eventTableOptions || [1, 2, 3, 4, 5, 6, 7, 8];
-  const f = { tables: 2, target: cfg.eventTarget || 250 };
+  const f = { tables: 2, target: cfg.eventTarget || 250, teamMin4: true };
   const { el, body } = modalCard({ title: 'Create Tournament', id: 'event', cls: 'small' });
   body.append(
     h('p', { class: 'lead', text: 'Run one to eight tables. Players join with your code and are seated four to a table; bots fill empty seats. Each table plays one game.' }),
@@ -672,22 +672,33 @@ function openEventModal() {
     seg(opts.map((n) => [n, String(n)]), f.tables, (v) => { f.tables = v; }),
     h('div', { class: 'field-label', text: 'Each game goes to' }),
     seg((cfg.tableTargets || [250, 500]).map((n) => [n, String(n)]), f.target, (v) => { f.target = v; }),
+    ...bidRuleField(f),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('event')),
-      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target }); })));
+      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4 }); })));
   openModal('event', el);
 }
+
+/** Premium host's bidding rule: partners must bid at least 4 together (default) or regular spades bidding. */
+function bidRuleField(f) {
+  return [
+    h('div', { class: 'field-label', text: 'Bidding' }),
+    seg([[true, 'Team min 4'], [false, 'Regular bidding']], f.teamMin4, (v) => { f.teamMin4 = v; }),
+  ];
+}
+const bidRuleLabel = (teamMin) => (teamMin ? `Team min ${teamMin}` : 'Regular bidding');
 
 function openBracketModal() {
   closeModal('play');
   const cfg = state.config || {};
-  const f = { size: (cfg.tournamentSizes || [4, 8, 16])[0] };
+  const f = { size: (cfg.tournamentSizes || [4, 8, 16])[0], teamMin4: true };
   const { el, body } = modalCard({ title: 'Create Bracket', id: 'bracket', cls: 'small' });
   body.append(
     h('p', { class: 'lead', text: `A winner-advances bracket. Matches go to ${cfg.tournamentTargetEarly}; the final goes to ${cfg.tournamentTargetFinal}. Solo players are paired up and bots fill empty teams.` }),
     h('div', { class: 'field-label', text: 'Teams' }),
     seg((cfg.tournamentSizes || [4, 8, 16]).map((n) => [n, String(n)]), f.size, (v) => { f.size = v; }),
+    ...bidRuleField(f),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('bracket')),
-      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: false }); })));
+      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: false, teamMin4: f.teamMin4 }); })));
   openModal('bracket', el);
 }
 
@@ -744,7 +755,7 @@ function openRules() {
       `A game is played over several hands. The first team to reach the target score wins. Tables play to ${targets}.`),
     sec('Bidding',
       `Starting left of the dealer, each player bids how many tricks they expect to win. You can bid from ${bid.minBid} to ${bid.maxBid}${bid.allowNil ? ', or bid Nil (0)' : ''}. You can’t change a bid.`,
-      'On a Premium host’s table the two partners must bid at least 4 together. One partner can bid 1, 2 or 3 as long as the pair reaches 4, and the second partner to bid can’t go below what is needed. Free Play now games use regular spades bidding with no minimum.',
+      'Premium hosts choose the bidding rule for their tables, tournaments and brackets. With Team min 4 (the default) the two partners must bid at least 4 together: one partner can bid 1, 2 or 3 as long as the pair reaches 4, and the second partner to bid can’t go below what is needed. With Regular bidding there is no minimum. Free Play now games always use regular spades bidding.',
       `Partners’ bids are added together into one team contract.${bid.allowNil ? ' A Nil bid is separate from the contract.' : ''}`),
     sec('Playing a hand',
       'The player left of the dealer leads. You must follow the suit that was led if you can. If you can’t, play any card, including a spade.',
@@ -1086,7 +1097,7 @@ function setAuto(sig, build) {
 function renderAuto(t) {
   if (!t) { setAuto('', null); return; }
   if (t.phase === 'waiting') {
-    const sig = ['lobby', t.id, t.code, JSON.stringify(t.rules), t.isHost, t.hostSeat, t.mySeat, JSON.stringify(t.seats.map((s) => [s.kind, s.name]))].join('|');
+    const sig = ['lobby', t.id, t.code, JSON.stringify(t.rules), t.bidRules && t.bidRules.teamMin, t.isHost, t.hostSeat, t.mySeat, JSON.stringify(t.seats.map((s) => [s.kind, s.name]))].join('|');
     setAuto(sig, () => hostLobby(t));
   } else if (t.phase === 'handOver' && t.lastHand && !(t.spectator && state.dismissed === t.handNo)) {
     const me = t.mySeat >= 0 ? t.seats[t.mySeat] : null;
@@ -1135,6 +1146,7 @@ function hostLobby(t) {
       chip(`First to ${r.target}`, () => send({ t: 'setRules', target: other })),
       chip(`Break rule ${r.breakRule ? 'on' : 'off'}`, () => send({ t: 'setRules', breakRule: !r.breakRule })),
       chip(`Sandbags ${r.sandbags ? 'on' : 'off'}`, () => send({ t: 'setRules', sandbags: !r.sandbags })),
+      ...(t.quick || t.practice ? [] : [chip(bidRuleLabel(t.bidRules && t.bidRules.teamMin), () => send({ t: 'setRules', teamMin4: !(t.bidRules && t.bidRules.teamMin) }))]),
       h('span', { class: 'rchip', text: t.quick ? 'Quick play' : t.practice ? 'Practice vs bots' : t.isPublic ? 'Public table' : 'Private · Premium host' })),
     h('div', { class: 'tiny center-text', text: host ? 'Host controls · tap a rule to change it' : 'Host controls · only the host can change the rules' }),
     h('div', { class: 'seatgrid' }, seatOrder.map((i) => seatCard(t, i))),
@@ -1223,7 +1235,7 @@ function renderBracketSheet() {
   if (!T) return;
   const sh = sheetShell(`Bracket · ${T.size} teams`, T.state, stateBadge(T.state));
   sh.append(codeBox(T.code, 'TOURNAMENT CODE'),
-    h('div', { class: 'muted', text: `Free to join · matches to ${T.rounds.length ? T.rounds[0].target : state.config.tournamentTargetEarly}, final to ${state.config.tournamentTargetFinal}` }));
+    h('div', { class: 'muted', text: `Free to join · matches to ${T.rounds.length ? T.rounds[0].target : state.config.tournamentTargetEarly}, final to ${state.config.tournamentTargetFinal} · ${bidRuleLabel(T.teamMin)}` }));
   if (T.champion) {
     sh.append(h('div', { class: 'champ' }, h('div', { class: 'muted', text: 'Champion' }), h('h3', { text: `🏆 ${T.champion.name}` }),
       T.runnerUp ? h('div', { text: `Runner-up: ${T.runnerUp.name}` }) : null));
@@ -1280,7 +1292,7 @@ function renderEventSheet() {
   if (!E) return;
   const sh = sheetShell(`Tournament · ${E.tables} ${E.tables === 1 ? 'table' : 'tables'}`, E.state, stateBadge(E.state));
   sh.append(codeBox(E.code, 'TOURNAMENT CODE'),
-    h('div', { class: 'muted', text: `Free to join · each table plays one game to ${E.target} · up to ${E.capacity} players` }));
+    h('div', { class: 'muted', text: `Free to join · each table plays one game to ${E.target} · ${bidRuleLabel(E.teamMin)} · up to ${E.capacity} players` }));
   if (E.state === 'registering') {
     sh.append(h('div', { class: 'panel' },
       h('h3', { text: `Players ${E.entrants.length}/${E.capacity}` }),

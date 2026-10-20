@@ -37,6 +37,8 @@ export interface EventInit {
   tables: number;
   target: number;
   organizerId: string;
+  /** Premium host's bidding rule for every table this opens: true = partners must bid at least CONFIG.rules.premiumTeamMin together. Default true. */
+  teamMin4?: boolean;
   host: EventHost;
 }
 
@@ -49,6 +51,7 @@ export class TableEvent {
   readonly tables: number;
   readonly target: number;
   readonly organizerId: string;
+  readonly teamMin4: boolean;
   readonly createdAt = Date.now();
   state: EState = 'registering';
   finishedAt: number | null = null;
@@ -63,6 +66,7 @@ export class TableEvent {
     this.tables = init.tables;
     this.target = init.target;
     this.organizerId = init.organizerId;
+    this.teamMin4 = init.teamMin4 !== false;
     this.host = init.host;
   }
 
@@ -153,6 +157,7 @@ export class TableEvent {
       id: this.id,
       code: this.code,
       tables: this.tables,
+      teamMin: this.teamMin4 ? CONFIG.rules.premiumTeamMin : 0,
       target: this.target,
       state: this.state,
       isOrganizer: pid === this.organizerId,
