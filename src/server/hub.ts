@@ -10,6 +10,7 @@ import { Team } from '../engine/game.js';
 import { CODE_ALPHABET, ClientMsg, EMAIL_RE, ErrorCode, RateLimiter, parseClientMessage } from './protocol.js';
 import { EventTableEntry, TableEvent } from './event.js';
 import { Billing, BillingError } from './billing.js';
+import { isTestNick, logActivity } from './activity.js';
 import { SubscriptionStore } from './subscriptions.js';
 import { Table, Timings, defaultTimings } from './table.js';
 import { Match, Tournament } from './tournament.js';
@@ -217,6 +218,7 @@ export class Hub {
     if (msg.nick) p.nick = msg.nick;
     p.lastSeen = Date.now();
     conn.player = p;
+    logActivity('hello', { resumed, test: isTestNick(p.nick) });
     this.sendWs(conn.ws, {
       t: 'welcome', token: p.token, id: p.id, nick: p.nick, resumed,
       subscribed: this.isSubscribed(p),
@@ -394,8 +396,15 @@ export class Hub {
         matchOver: (t, winner, scores, forfeit) => this.matchOver(t, winner, scores, forfeit),
         gameEnded: (t, winner, scores, forfeit) => {
           const tour = t.tournament ? this.tournaments.get(t.tournament.id) : undefined;
-          return tour && t.tournament ? tour.recordGame(t.tournament.matchId, winner, scores, forfeit) : null;
+          const s = tour && t.tournament ? tour.recordGame(t.tournament.matchId, winner, scores, forfeit) : null;
+          if (s?.decided && tour && t.tournament) {
+            const m = tour.findMatch(t.tournament.matchId);
+            logActivity('series_end', { tournamentId: tour.id, tableId: t.id, round: m ? m.round + 1 : null, final: m ? m.round === tour.totalRounds - 1 : null, bestOf: 2 * s.need - 1, wins: s.wins, winner, forfeit, ...this.testFlag(t) });
+          }
+          return s;
         },
+        gameStarted: (t) => logActivity('game_start', this.gameFields(t)),
+        gameFinished: (t, winner, scores, forfeit, seconds) => logActivity('game_end', { ...this.gameFields(t), winner, scores, forfeit, seconds }),
       },
     });
     this.tables.set(id, table);
@@ -403,8 +412,29 @@ export class Hub {
     return table;
   }
 
+  /** Tables made by a Premium player's "Quick play at a public table". */
+  private quickTables = new Set<string>();
+
+  private tableKind(t: Table): string {
+    if (t.tournament) return this.events.has(t.tournament.id) ? 'event' : 'tournament';
+    if (t.quick) return 'playnow';
+    if (this.quickTables.has(t.id)) return 'quickplay';
+    return 'hosted';
+  }
+
+  private testFlag(t: Table): { test?: true } {
+    return t.seats.some((s) => s.kind === 'human' && isTestNick(s.name)) ? { test: true } : {};
+  }
+
+  private gameFields(t: Table): Record<string, unknown> {
+    const humans = t.seats.filter((s) => s.kind === 'human').length;
+    const bots = t.seats.filter((s) => s.kind === 'bot').length;
+    return { tableId: t.id, kind: this.tableKind(t), humans, bots, target: t.target, ...this.testFlag(t) };
+  }
+
   private tableDestroyed(t: Table, people: string[]): void {
     this.tables.delete(t.id);
+    this.quickTables.delete(t.id);
     this.codes.delete(t.code);
     for (const pid of people) this.releasePlayer(pid, t, 'The table closed');
     this.markLobbyDirty();
@@ -427,12 +457,21 @@ export class Hub {
     const people = t.participants();
     t.dispose();
     this.tables.delete(t.id);
+    this.quickTables.delete(t.id);
     this.codes.delete(t.code);
     for (const pid of people) this.releasePlayer(pid, t, 'Match finished');
     const tour = info ? this.tournaments.get(info.id) : undefined;
-    if (tour && info) tour.matchResult(info.matchId, winner, scores);
+    if (tour && info) {
+      const was = tour.state;
+      tour.matchResult(info.matchId, winner, scores);
+      if (was !== 'finished' && tour.state === 'finished') this.logTournamentEnd(tour);
+    }
     const ev = info ? this.events.get(info.id) : undefined;
-    if (ev && info) ev.tableResult(info.matchId, winner, scores, _forfeit);
+    if (ev && info) {
+      const was = ev.state;
+      ev.tableResult(info.matchId, winner, scores, _forfeit);
+      if (was !== 'finished' && ev.state === 'finished') logActivity('tournament_end', { kind: 'event', tournamentId: ev.id, ...this.testOrg(ev.organizerId) });
+    }
     this.markLobbyDirty();
   }
 
@@ -519,6 +558,7 @@ export class Hub {
     if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
     this.leaveCurrent(p);
     const table = this.makeTable({ isPublic: true, target: CONFIG.quickPlayTarget, hostId: p.id, practice: false });
+    this.quickTables.add(table.id);
     table.seatHuman(0, p.id, p.nick, true);
     p.tableId = table.id;
     table.startGame(); // bots fill the other seats at once
@@ -650,7 +690,17 @@ export class Hub {
     const t = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
     if (!t) return this.err(p, 'not_found', 'You are not in a tournament');
     const r = t.start(p.id);
-    if (!r.ok) this.err(p, r.code as ErrorCode, r.message);
+    if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
+    logActivity('tournament_start', { kind: 'tournament', tournamentId: t.id, size: t.size, rounds: t.totalRounds, humans: t.entrants.length, ...this.testOrg(t.organizerId) });
+    if (t.state === 'finished') this.logTournamentEnd(t); // an all-bot bracket can finish at once
+  }
+
+  private testOrg(pid: string): { test?: true } {
+    return isTestNick(this.players.get(pid)?.nick) ? { test: true } : {};
+  }
+
+  private logTournamentEnd(t: Tournament): void {
+    logActivity('tournament_end', { kind: 'tournament', tournamentId: t.id, size: t.size, champion: t.champion?.name ?? null, ...this.testOrg(t.organizerId) });
   }
 
   private leaveTournament(p: Player): void {
@@ -752,7 +802,8 @@ export class Hub {
     const ev = p.eventId ? this.events.get(p.eventId) : undefined;
     if (!ev) return this.err(p, 'not_found', 'You are not in a tournament');
     const r = ev.start(p.id);
-    if (!r.ok) this.err(p, r.code as ErrorCode, r.message);
+    if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
+    logActivity('tournament_start', { kind: 'event', tournamentId: ev.id, ...this.testOrg(ev.organizerId) });
   }
 
   private leaveEvent(p: Player): void {
@@ -876,6 +927,7 @@ export class Hub {
       try {
         const url = await this.billing.createCheckoutSession(p.id, conn.baseUrl || `http://localhost`);
         this.send(p.id, { t: 'checkout', url });
+        logActivity('checkout_started', { test: isTestNick(p.nick) });
       } catch {
         this.notice(p, 'error', 'Could not start checkout. Please try again in a moment.');
       }
@@ -911,7 +963,9 @@ export class Hub {
     if (this.store.claimSession(sessionId, p.id) !== p.id) {
       return reply(false, 'claimed', 'That purchase is already linked to another device. Use Restore Premium with your email to use it here.');
     }
+    const already = this.isSubscribed(p);
     this.store.setStripe(p.id, out.sub);
+    if (!already) logActivity('checkout_completed', { test: isTestNick(p.nick) }); // verified with Stripe; a repeat confirm is not counted again
     this.send(p.id, { t: 'subscription', subscribed: true });
     return reply(true, 'ok', 'Premium is active.');
   }

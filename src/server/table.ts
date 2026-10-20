@@ -44,6 +44,9 @@ export interface TableHooks {
   matchOver?(table: Table, winner: Team, scores: [number, number], forfeit: boolean): void;
   /** Bracket tables: a game of the series ended. Returns the series so far; null = not a series (events). */
   gameEnded?(table: Table, winner: Team, scores: [number, number], forfeit: boolean): SeriesInfo | null;
+  /** Activity log: a game was dealt / a game ended (every table). */
+  gameStarted?(table: Table): void;
+  gameFinished?(table: Table, winner: Team | null, scores: [number, number], forfeit: boolean, seconds: number): void;
 }
 
 export interface TableInit {
@@ -83,6 +86,7 @@ export class Table {
   readonly creatorId: string | null;
   readonly practice: boolean;
   readonly quick: boolean;
+  startedAt = 0;
   teamMin: number;
   seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
   watchers = new Set<string>();
@@ -308,6 +312,8 @@ export class Table {
     this.teamHadHumans = [0, 1].map((t) => this.seats.some((s, i) => i % 2 === t && s.kind === 'human')) as [boolean, boolean];
     this.game = createGame({ target: this.target, breakRule: this.breakRule, sandbags: this.sandbags, teamMin: this.teamMin, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
     this.status = 'playing';
+    this.startedAt = Date.now();
+    this.hooks.gameStarted?.(this);
     this.resetHandFlags();
     this.broadcast();
     this.hooks.changed();
@@ -405,6 +411,7 @@ export class Table {
     this.clearTimer();
     this.hooks.changed();
     const g = this.game as GameState;
+    this.hooks.gameFinished?.(this, g.winner, [g.scores[0], g.scores[1]], forfeit, Math.round((Date.now() - this.startedAt) / 1000));
     if (g.winner !== null && !forfeit) this.botChat.onGameEnd(g.winner);
     if (this.tournament && this.hooks.matchOver) {
       const winner = g.winner as Team;
