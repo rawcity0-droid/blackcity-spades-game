@@ -399,3 +399,4 @@ bots only bid 0 on a hopeless hand after their partner already bid 4+, and the N
   A person who leaves mid-bracket is replaced by a persona bot too.
 - A finished game never blocks the player: starting or joining anything leaves a finished (non-tournament) table automatically
   (`Hub.releaseFinishedTable`). The Close button on a finished bracket / event sheet leaves it and returns home.
+- Reconnecting (reload) never restores something that is over: `hello` drops a finished table, bracket or event and sends the lobby.

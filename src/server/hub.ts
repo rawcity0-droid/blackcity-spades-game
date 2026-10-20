@@ -238,13 +238,16 @@ export class Hub {
       },
     });
     this.sendMatching(p); // a second tab / reload while still queued shows the waiting state again
-    const table = p.tableId ? this.tables.get(p.tableId) : undefined;
+    // A reload never lands back on something that is over: a finished table, bracket or event is dropped and the lobby is shown.
+    const done = (x?: { state: string }) => !x || x.state === 'finished' || x.state === 'cancelled';
+    let table = p.tableId ? this.tables.get(p.tableId) : undefined;
+    if (table && table.status === 'finished' && !table.tournament) { table.leave(p.id); table = undefined; }
     if (table && table.seatOf(p.id) >= 0) table.setConnected(p.id, true);
     else { p.tableId = null; this.sendWs(conn.ws, this.lobbyMessage()); }
     const t = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
-    if (t) this.send(p.id, t.view(p.id)); else p.tournamentId = null;
+    if (t && !done(t)) this.send(p.id, t.view(p.id)); else { p.tournamentId = null; t?.viewers.delete(p.id); }
     const ev = p.eventId ? this.events.get(p.eventId) : undefined;
-    if (ev) this.send(p.id, ev.view(p.id)); else p.eventId = null;
+    if (ev && !done(ev)) this.send(p.id, ev.view(p.id)); else { p.eventId = null; ev?.viewers.delete(p.id); }
     if (this.isStale(p)) void this.recheck(p); // a cancelled subscription is noticed when the player comes back
   }
 

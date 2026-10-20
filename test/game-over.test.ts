@@ -48,3 +48,47 @@ test('a table still being played keeps blocking (no accidental leave)', async ()
     c.close();
   } finally { await srv.close(); }
 });
+
+async function reconnectMessages(port: number, token: string, ms = 800): Promise<{ c: any; msgs: any[] }> {
+  const { Client } = await import('./helpers.js');
+  const c = new Client(port);
+  await c.open();
+  const msgs: any[] = [];
+  c.ws.on('message', (d: any) => msgs.push(JSON.parse(d.toString())));
+  await c.hello('Host', token);
+  await new Promise((r) => setTimeout(r, ms));
+  return { c, msgs };
+}
+
+test('reloading after a finished Play now game lands in the lobby, not on the old table', async () => {
+  const srv = await testServer();
+  try {
+    const { c, welcome } = await connect(srv.port, 'Bea');
+    await finishSoloGame(c);
+    c.close();
+    const r = await reconnectMessages(srv.port, welcome.token);
+    assert.ok(!r.msgs.some((m) => m.t === 'table'), 'no finished table is restored');
+    assert.ok(r.msgs.some((m) => m.t === 'lobby'));
+    r.c.close();
+  } finally { await srv.close(); }
+});
+
+test('reloading after a finished bracket does not resend it; the player can host again', async () => {
+  const srv = await testServer({ devUnlock: true });
+  try {
+    const { c, welcome } = await connectPremium(srv.port, 'Host');
+    c.send({ t: 'createTournament', size: 4, isPublic: false });
+    await c.waitFor((m: any) => m.t === 'tournament');
+    c.send({ t: 'startTournament' });
+    autoPlay(c);
+    await c.waitFor((m: any) => m.t === 'tournament' && m.state === 'finished', 60000, true);
+    await new Promise((r) => setTimeout(r, 500));
+    c.close();
+    const r = await reconnectMessages(srv.port, welcome.token);
+    assert.ok(!r.msgs.some((m) => m.t === 'tournament'), 'the finished bracket is not restored');
+    assert.ok(!r.msgs.some((m) => m.t === 'table' && m.phase === 'finished'), 'no finished table either');
+    r.c.send({ t: 'createTournament', size: 4, isPublic: false });
+    await r.c.waitFor((m: any) => m.t === 'tournament' && m.state === 'registering', 5000, true);
+    r.c.close();
+  } finally { await srv.close(); }
+});
