@@ -5,8 +5,9 @@
 import { CONFIG, tournamentTarget } from '../config.js';
 import { Rng, secureRng, shuffle } from '../engine/cards.js';
 import { simulateGame } from '../engine/sim.js';
+import { Persona, pickPersona } from './personas.js';
 
-export interface Slot { playerId: string | null; name: string } // playerId null = bot
+export interface Slot { playerId: string | null; name: string; persona?: Persona } // playerId null = bot (with its persona: name, picture, style, skill)
 export interface TeamRef { id: number; name: string; slots: [Slot, Slot] }
 export type MatchStatus = 'waiting' | 'live' | 'done';
 
@@ -115,7 +116,7 @@ export class Tournament {
     } else if (this.state === 'running') {
       for (const r of this.rounds) for (const m of r) {
         if (m.status === 'done') continue; // live matches too: the TeamRef is shared with the later rounds the team may reach
-        for (const t of m.teams) for (const s of t?.slots ?? []) if (s.playerId === pid) { s.playerId = null; s.name = 'Bot'; }
+        for (const t of m.teams) for (const s of t?.slots ?? []) if (s.playerId === pid && t) { Object.assign(s, this.botSlot()); t.name = `${t.slots[0].name} & ${t.slots[1].name}`; }
       }
     }
     this.viewers.delete(pid);
@@ -133,6 +134,17 @@ export class Tournament {
     return { ok: true };
   }
 
+  /** A bot slot with a persona whose name is not used anywhere else in this tournament (people included). */
+  private botSlot(): Slot {
+    const used = new Set<string>(this.entrants.map((e) => e.name));
+    for (const r of this.rounds) for (const m of r) for (const t of m.teams) for (const s of t?.slots ?? []) used.add(s.name);
+    for (const n of this.pendingNames) used.add(n);
+    const persona = pickPersona(this.rng, used);
+    this.pendingNames.add(persona.name);
+    return { playerId: null, name: persona.name, persona };
+  }
+  private pendingNames = new Set<string>(); // bot names handed out while the bracket is being built
+
   /** Pair solos, add a bot partner to a leftover solo, fill with bot teams, shuffle seeding, build the bracket. */
   private build(): void {
     const teams: TeamRef[] = [];
@@ -142,14 +154,13 @@ export class Tournament {
       const b = humans[i + 1];
       const slots: [Slot, Slot] = [
         { playerId: a.playerId, name: a.name },
-        b ? { playerId: b.playerId, name: b.name } : { playerId: null, name: 'Bot' },
+        b ? { playerId: b.playerId, name: b.name } : this.botSlot(),
       ];
       teams.push({ id: 0, name: `${slots[0].name} & ${slots[1].name}`, slots });
     }
-    let botTeams = 0;
     while (teams.length < this.size) {
-      botTeams += 1;
-      teams.push({ id: 0, name: `Bot Team ${botTeams}`, slots: [{ playerId: null, name: 'Bot' }, { playerId: null, name: 'Bot' }] });
+      const slots: [Slot, Slot] = [this.botSlot(), this.botSlot()];
+      teams.push({ id: 0, name: `${slots[0].name} & ${slots[1].name}`, slots });
     }
     const seeded = shuffle(teams, this.rng);
     seeded.forEach((t, i) => { t.id = i + 1; });
@@ -223,7 +234,7 @@ export class Tournament {
     const teamView = (t: TeamRef | null) => t && {
       id: t.id,
       name: t.name,
-      players: t.slots.map((s) => ({ name: s.name, bot: s.playerId === null })),
+      players: t.slots.map((s) => ({ name: s.name, bot: s.playerId === null, face: s.playerId === null ? s.persona?.face : undefined })),
       mine: t.slots.some((s) => s.playerId === pid),
     };
     return {

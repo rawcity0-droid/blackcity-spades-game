@@ -390,3 +390,12 @@ On team-minimum tables (`teamMin > 0`: Premium hosted tables, brackets, events a
 partner may bid anything (including 0) and the second must reach the minimum (after a 0 that means 4+). A 0 is a plain zero: no ±100, the player's tricks
 count toward the team, and the team contract (sum of both bids) is scored normally (made/set, overtricks are bags). The client shows "0" instead of "Nil",
 bots only bid 0 on a hopeless hand after their partner already bid 4+, and the Nil chat lines and Nil play logic are off. Free Play now and Regular bidding keep real Nil.
+
+## Bot personas in brackets and events; leaving finished games
+
+- Bot personas (name, picture, chat style, skill) come from `src/server/personas.ts` (`pickPersona`). Bracket and event bot slots get one when the
+  bracket / event is built (names unique across the whole tournament, never clashing with people), teams are named after their players
+  ("Lowrider Lou & Tasha"), the views carry `players[].face`, and match tables seat exactly those personas (`Table.seatBot(seat, persona)`).
+  A person who leaves mid-bracket is replaced by a persona bot too.
+- A finished game never blocks the player: starting or joining anything leaves a finished (non-tournament) table automatically
+  (`Hub.releaseFinishedTable`). The Close button on a finished bracket / event sheet leaves it and returns home.

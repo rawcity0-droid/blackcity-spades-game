@@ -841,8 +841,10 @@ function askConfirm(message, okLabel, onOk) {
 }
 
 function leaveTournament() {
-  const kind = tournamentKind();
-  if (!kind) return;
+  // A finished (or cancelled) bracket / event is no longer "active", but its sheet's Close button still has to leave it
+  const kind = tournamentKind() || (state.ui === 'event' && state.event ? 'event' : state.ui === 'tournament' && state.tour ? 'tournament'
+    : state.event ? 'event' : state.tour ? 'tournament' : null);
+  if (!kind) { state.ui = 'home'; render(); return; }
   const x = kind === 'event' ? state.event : state.tour;
   const ask = sheetLeaveConfirm(x);
   const go = () => send({ t: kind === 'event' ? 'leaveEvent' : 'leaveTournament' });
@@ -1278,12 +1280,17 @@ function renderBracketSheet() {
   root.append(sh);
 }
 
+/** The two players' small avatars (bot pictures, or first letters) in front of a team name. */
+function teamFaces(t) {
+  return h('span', { class: 'mfaces' }, (t.players || []).map((p) => avatar(p.name, { cls: 'mini', face: p.bot ? p.face : '' })));
+}
+
 function matchCard(m) {
   const teamRow = (t, idx) => {
     if (!t) return h('div', { class: 'mteam lose' }, h('span', { class: 'tn muted', text: 'To be decided' }));
     const done = m.winner !== null;
     return h('div', { class: `mteam${t.mine ? ' mine' : ''}${done ? (m.winner === idx ? ' win' : ' lose') : ''}` },
-      h('span', { class: 'tn', text: t.name }), h('span', { text: m.score ? String(m.score[idx]) : '' }));
+      teamFaces(t), h('span', { class: 'tn', text: t.name }), h('span', { text: m.score ? String(m.score[idx]) : '' }));
   };
   const foot = h('div', { class: 'mfoot' });
   if (m.status === 'live') {
@@ -1333,7 +1340,7 @@ function renderEventSheet() {
 
 function eventTableCard(r) {
   const teamRow = (tm, idx) => h('div', { class: `mteam${tm.mine ? ' mine' : ''}${r.winner !== null ? (r.winner === idx ? ' win' : ' lose') : ''}` },
-    h('span', { class: 'tn', text: tm.name }), h('span', { text: r.scores ? String(r.scores[idx]) : '' }));
+    teamFaces(tm), h('span', { class: 'tn', text: tm.name }), h('span', { text: r.scores ? String(r.scores[idx]) : '' }));
   const foot = h('div', { class: 'mfoot' });
   if (r.status === 'live') {
     const mine = r.teams.some((t) => t.mine);

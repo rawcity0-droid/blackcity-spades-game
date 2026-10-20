@@ -6,8 +6,10 @@
 // (no joining mid-game, forfeit / fast-forward when a team or everyone leaves).
 
 import { CONFIG } from '../config.js';
+import { secureRng } from '../engine/cards.js';
+import { Persona, pickPersona } from './personas.js';
 
-export interface EventSeat { playerId: string | null; name: string }
+export interface EventSeat { playerId: string | null; name: string; persona?: Persona } // playerId null = bot
 export type EventTableStatus = 'live' | 'done';
 
 export interface EventTableEntry {
@@ -106,10 +108,12 @@ export class TableEvent {
     const count = Math.min(this.tables, Math.max(1, Math.ceil(this.entrants.length / 4)));
     this.state = 'running';
     this.results = [];
+    const used = new Set<string>(this.entrants.map((e) => e.name)); // bot names are unique across the whole event
     for (let i = 0; i < count; i++) {
       const group = this.entrants.slice(i * 4, i * 4 + 4);
-      const seats: EventSeat[] = [0, 1, 2, 3].map(() => ({ playerId: null, name: 'Bot' }));
+      const seats: EventSeat[] = [0, 1, 2, 3].map(() => ({ playerId: null, name: '' }));
       group.forEach((e, k) => { seats[SEAT_ORDER[k]] = { playerId: e.playerId, name: e.name }; });
+      seats.forEach((s, k) => { if (!s.playerId) seats[k] = this.botSeat(used); });
       const entry: EventTableEntry = { no: i + 1, seats, tableId: null, tableCode: null, status: 'live', winner: null, scores: null, forfeit: false };
       this.results.push(entry);
       const t = this.host.createEventTable(this, entry);
@@ -118,6 +122,12 @@ export class TableEvent {
     }
     this.host.changed(this);
     return { ok: true };
+  }
+
+  private botSeat(used: Set<string>): EventSeat {
+    const persona = pickPersona(secureRng, used);
+    used.add(persona.name);
+    return { playerId: null, name: persona.name, persona };
   }
 
   tableResult(matchId: string, winner: 0 | 1, scores: [number, number], forfeit: boolean): void {
@@ -138,7 +148,7 @@ export class TableEvent {
       const seats = side === 0 ? [e.seats[0], e.seats[2]] : [e.seats[1], e.seats[3]];
       return {
         name: seats.map((s) => s.name).join(' & '),
-        players: seats.map((s) => ({ name: s.name, bot: s.playerId === null })),
+        players: seats.map((s) => ({ name: s.name, bot: s.playerId === null, face: s.playerId === null ? s.persona?.face : undefined })),
         mine: seats.some((s) => s.playerId === pid),
       };
     };

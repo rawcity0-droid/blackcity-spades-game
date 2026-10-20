@@ -315,7 +315,11 @@ table.sum th:first-child, table.sum td:first-child { text-align: left; font-weig
 .match.live { border-color: var(--red); }
 .mhead { padding: 6px 10px; font-weight: 800; font-size: 14px; background: #ecece4; }
 .mteam { display: flex; justify-content: space-between; gap: 6px; padding: 8px 10px; font-size: 14px; border-top: 1px solid #e3e3da; }
-.mteam .tn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mteam .tn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.mteam { align-items: center; }
+.mfaces { display: flex; flex: none; }
+.avatar.mini { width: 22px; height: 22px; font-size: 11px; border-width: 1px; }
+.mfaces .avatar.mini + .avatar.mini { margin-left: -6px; }
 .mteam.win { background: rgba(47, 143, 91, .18); font-weight: 800; }
 .mteam.lose { opacity: .6; }
 .mteam.mine { box-shadow: inset 4px 0 0 var(--gold-d); }

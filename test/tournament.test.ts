@@ -80,8 +80,13 @@ test('only the organizer can start; registration limits and solo pairing', () =>
   t.start('org');
   const names = t.rounds[0].flatMap((m) => m.teams.map((x) => x!.name));
   assert.ok(names.includes('Org & Bea'), 'first two solo joiners are paired together');
-  assert.ok(names.includes('Cy & Bot'), 'leftover solo gets a bot partner');
-  assert.equal(names.filter((n) => n.startsWith('Bot Team')).length, 2, 'unfilled slots become bot teams');
+  const teams = t.rounds[0].flatMap((m) => m.teams.map((x) => x!));
+  const cy = teams.find((x) => x.slots[0].name === 'Cy')!;
+  assert.equal(cy.slots[1].playerId, null, 'leftover solo gets a bot partner');
+  assert.equal(cy.name, `Cy & ${cy.slots[1].name}`);
+  const botTeams = teams.filter((x) => x.slots.every((s) => s.playerId === null));
+  assert.equal(botTeams.length, 2, 'unfilled slots become bot teams');
+  for (const bt of botTeams) assert.equal(bt.name, `${bt.slots[0].name} & ${bt.slots[1].name}`, 'bot teams are named after their bots');
   assert.ok(host.tables.length >= 1); // human matches are played at real tables
   assert.equal(t.join('late', 'Late').ok, false); // registration closed
 

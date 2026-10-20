@@ -341,12 +341,24 @@ export class Hub {
 
   private busyReason(p: Player): string | null {
     if (this.inQueue(p.id)) return 'You are finding players. Cancel that first';
+    this.releaseFinishedTable(p);
     if (p.tableId) return 'Leave your current table first';
     const t = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
     if (t && (t.state === 'registering' || t.state === 'running')) return 'You are in a tournament. Leave it first';
     const ev = p.eventId ? this.events.get(p.eventId) : undefined;
     if (ev && (ev.state === 'registering' || ev.state === 'running')) return 'You are in a tournament. Leave it first';
     return null;
+  }
+
+  /** A game that is over (or a table that no longer exists) never blocks starting something new: leave it quietly.
+   *  Without this, a player who went back home from the game-over screen got "Leave your current table first" on Play now. */
+  private releaseFinishedTable(p: Player): void {
+    if (!p.tableId) return;
+    const t = this.tables.get(p.tableId);
+    if (t && (t.status !== 'finished' || t.tournament)) return; // tournament tables hand the player back to the bracket themselves
+    p.tableId = null;
+    t?.leave(p.id);
+    this.send(p.id, { t: 'left', reason: '' });
   }
 
   private newId(taken: (id: string) => boolean): string {
@@ -679,7 +691,7 @@ export class Hub {
       team!.slots.forEach((slot, k) => {
         const seat = seats[k];
         const pl = slot.playerId ? this.players.get(slot.playerId) : undefined;
-        if (!pl) { table.seatBot(seat); return; }
+        if (!pl) { table.seatBot(seat, slot.persona); return; }
         this.leaveCurrent(pl);
         if (pl.tableId) this.tables.get(pl.tableId)?.leave(pl.id);
         table.seatHuman(seat, pl.id, pl.nick, !!pl.ws);
@@ -779,7 +791,7 @@ export class Hub {
     });
     entry.seats.forEach((slot, seat) => {
       const pl = slot.playerId ? this.players.get(slot.playerId) : undefined;
-      if (!pl) { table.seatBot(seat); return; }
+      if (!pl) { table.seatBot(seat, slot.persona); return; }
       this.leaveCurrent(pl);
       if (pl.tableId) this.tables.get(pl.tableId)?.leave(pl.id);
       table.seatHuman(seat, pl.id, pl.nick, !!pl.ws);
