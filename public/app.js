@@ -829,21 +829,32 @@ function returnToGame() {
 const tournamentKind = () => activeGame({ event: state.event, tour: state.tour });
 
 /** Really leave the tournament / event (with the confirm from leave-rules.js). */
+/** In-app confirm (native confirm() is blocked in some phone in-app browsers and returns false). onOk runs only on the confirm tap. */
+function askConfirm(message, okLabel, onOk) {
+  const { el, body } = modalCard({ title: 'Are you sure?', id: 'askconfirm', cls: 'small' });
+  body.append(
+    h('p', { class: 'lead', text: message }),
+    h('div', { class: 'btn-row' },
+      btn('soft', 'Cancel', () => closeModal('askconfirm')),
+      btn('gold', okLabel, () => { closeModal('askconfirm'); onOk(); }, { 'data-confirm': 'ok' })));
+  openModal('askconfirm', el);
+}
+
 function leaveTournament() {
   const kind = tournamentKind();
   if (!kind) return;
   const x = kind === 'event' ? state.event : state.tour;
   const ask = sheetLeaveConfirm(x);
-  if (ask && !confirm(ask)) return;
-  send({ t: kind === 'event' ? 'leaveEvent' : 'leaveTournament' });
+  const go = () => send({ t: kind === 'event' ? 'leaveEvent' : 'leaveTournament' });
+  if (ask) askConfirm(ask, 'Leave', go); else go();
 }
 
 function leaveTable() {
   const t = state.table;
   if (!t) return;
   const msg = tableLeaveConfirm(t);
-  if (msg && !confirm(msg)) return;
-  send({ t: 'leaveTable' });
+  const go = () => send({ t: 'leaveTable' });
+  if (msg) askConfirm(msg, 'Leave', go); else go();
 }
 
 // ---------- rendering root ----------
