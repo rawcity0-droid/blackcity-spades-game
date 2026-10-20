@@ -81,8 +81,11 @@ test('bots greet the table, answer a person who writes, and stop when the table 
   for (const m of greeting) assert.ok(botNames.includes(m.from), 'lines come from a seated bot');
   assert.ok(greeting.every((m) => m.text.length > 0 && m.text.length <= 200));
   const before = botLines(sent).length;
-  t.postChat('p1', 'Raw', 'hey y’all, good luck');
-  await sleep(300);
+  // Bots answer about 9 times in 10 (on purpose, so it doesn't feel scripted): try a few times
+  for (let i = 0; i < 4 && botLines(sent).length === before; i++) {
+    t.postChat('p1', 'Raw', 'hey y’all, good luck');
+    await sleep(300);
+  }
   assert.ok(botLines(sent).length > before, 'a bot replies to a person');
   const reply = botLines(sent).slice(before)[0];
   assert.ok(botNames.includes(reply.from));
@@ -98,8 +101,10 @@ test('asking whether they are bots gets a playful dodge, not a claim of being hu
   t.startGame();
   await sleep(150);
   const before = botLines(sent).length;
-  t.postChat('p1', 'Raw', 'are you guys bots?');
-  await sleep(300);
+  for (let i = 0; i < 4 && botLines(sent).length === before; i++) { // bots answer about 9 times in 10
+    t.postChat('p1', 'Raw', 'are you guys bots?');
+    await sleep(300);
+  }
   const reply = botLines(sent).slice(before)[0];
   assert.ok(reply, 'someone answers');
   assert.doesNotMatch(reply.text.toLowerCase(), /i('m| am) (a )?(real|human|person)/);
