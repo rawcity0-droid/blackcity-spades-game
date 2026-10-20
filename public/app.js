@@ -162,6 +162,7 @@ function handle(m) {
     case 'lobby': state.lobby = m; fillOpenTables(); return;
     case 'notice': toast(m.message, 5500); return;
     case 'restoreResult': onRestoreResult(m); return;
+    case 'ownerCodeResult': onOwnerCodeResult(m); return;
     case 'premiumResult': onPremiumResult(m); return;
     case 'checkout': {
       let ok = false;
@@ -502,6 +503,52 @@ function onRestoreResult(m) {
 // ---------- home ----------
 let homeSig = '';
 
+// Hidden owner panel: 3 taps on the home logo/title within 2 seconds. Nothing on screen points to it.
+let ownerTaps = [];
+function ownerTap() {
+  const now = Date.now();
+  ownerTaps = ownerTaps.filter((t) => now - t < 2000);
+  ownerTaps.push(now);
+  if (ownerTaps.length >= 3) { ownerTaps = []; openOwnerPanel(); }
+}
+const ownerUi = { setMsg: null, setBusy: null, timer: 0 };
+function openOwnerPanel() {
+  if (modalOpen('owner')) return;
+  const { el, body } = modalCard({ title: 'Owner', id: 'owner', cls: 'small', onClose: () => closeModal('owner') });
+  const input = h('input', { type: 'text', id: 'owner-code', inputmode: 'numeric', pattern: '[0-9]*', maxlength: 6, autocomplete: 'off', 'aria-label': 'Owner code', 'aria-describedby': 'owner-msg' });
+  const msg = h('div', { class: 'field-error', id: 'owner-msg', role: 'alert' });
+  msg.hidden = true;
+  const goBtn = btn('gold', 'Unlock', () => go());
+  ownerUi.setMsg = (text) => { msg.textContent = text || ''; msg.hidden = !text; };
+  ownerUi.setBusy = (on) => { goBtn.disabled = on; input.disabled = on; };
+  const go = () => {
+    const code = input.value.trim();
+    if (!/^\d{6}$/.test(code)) { ownerUi.setMsg('Enter the 6-digit code.'); input.focus(); return; }
+    ownerUi.setMsg('');
+    ownerUi.setBusy(true);
+    clearTimeout(ownerUi.timer);
+    ownerUi.timer = setTimeout(() => { ownerUi.setBusy(false); ownerUi.setMsg('No answer from the server. Try again.'); }, 8000);
+    if (!send({ t: 'ownerCode', code })) { clearTimeout(ownerUi.timer); ownerUi.setBusy(false); ownerUi.setMsg('You are offline. Try again in a moment.'); }
+    input.value = '';
+  };
+  input.addEventListener('input', () => { input.value = input.value.replace(/\D/g, '').slice(0, 6); ownerUi.setMsg(''); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  body.append(input, msg, h('div', { class: 'btn-row' }, btn('soft', 'Close', () => closeModal('owner')), goBtn));
+  openModal('owner', el);
+  input.focus();
+}
+function onOwnerCodeResult(m) {
+  clearTimeout(ownerUi.timer);
+  if (ownerUi.setBusy) ownerUi.setBusy(false);
+  if (m.ok) {
+    state.subscribed = true;
+    homeSig = '';
+    closeModal('owner');
+    toast(m.message || 'Premium unlocked', 4000);
+    render();
+  } else if (modalOpen('owner') && ownerUi.setMsg) ownerUi.setMsg(m.message || 'Not available.');
+}
+
 function renderHome() {
   const root = $('home-layer');
   const game = activeGame(state);
@@ -512,13 +559,13 @@ function renderHome() {
   const card = h('div', { class: 'home-card' },
     spadeShape('big-spade', 'url(#spadeGrad)'),
     h('div', { class: 'home-top' },
-      h('span', { class: 'brandmark', text: 'BLACKCITY' }),
+      h('span', { class: 'brandmark', text: 'BLACKCITY', onclick: ownerTap }),
       h('span', { class: 'tbl-open' + (state.connected ? '' : ' off'), text: state.connected ? 'Table open' : 'Connecting…' })),
     game ? h('button', { class: 'return-card', type: 'button', onclick: returnToGame },
       h('span', { class: 'rc-text' }, h('b', { text: 'Return to game' }), h('span', { text: summary })), iconArrow()) : null,
     h('div', { class: 'home-hero' },
       h('div', { class: 'spade-tile' }, spadeShape('', '#2a2a2a')),
-      h('h1', { text: 'Spades, built for the table.' })),
+      h('h1', { text: 'Spades, built for the table.', onclick: ownerTap })),
     h('p', { class: 'home-sub', text: 'Call your books, protect your partner, and win the game.' }),
     h('hr', { class: 'gold-rule' }),
     h('div', { class: 'chips' }, h('span', { text: 'Random players' }), h('span', { text: 'Full rules' }), h('span', { text: 'Fast matching' })),

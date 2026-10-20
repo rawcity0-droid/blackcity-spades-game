@@ -34,6 +34,7 @@ export type ClientMsg =
   | { t: 'leaveEvent' }
   | { t: 'goPremium' }
   | { t: 'restorePremium'; email: string }
+  | { t: 'ownerCode'; code: string }
   | { t: 'confirmPremium'; sessionId: string }
   | { t: 'chat'; text: string }
   | { t: 'devToggleSubscription' };
@@ -115,6 +116,8 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
     }
     case 'confirmPremium': // validated by the hub, which answers every attempt with exactly one premiumResult
       return { msg: { t: 'confirmPremium', sessionId: str(o.sessionId) ? o.sessionId.trim().slice(0, 300) : '' } };
+    case 'ownerCode': // the hub answers every attempt with exactly one ownerCodeResult; a malformed code is just a wrong code
+      return { msg: { t: 'ownerCode', code: str(o.code) ? o.code.trim().slice(0, 12) : '' } };
     case 'restorePremium': {
       // Not validated here: the hub answers every attempt with exactly one restoreResult (bad_email, not_found, rate_limited or ok)
       const email = str(o.email) ? o.email.trim().toLowerCase().slice(0, 300) : '';

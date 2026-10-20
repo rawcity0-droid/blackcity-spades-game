@@ -85,7 +85,8 @@ export function startServer(opts: { port?: number; host?: string } & HubOptions 
     const w = ws as typeof ws & { alive?: boolean };
     w.alive = true;
     ws.on('pong', () => { w.alive = true; });
-    const conn = hub.attach(ws, originOf(req));
+    const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim(); // Render's proxy puts the client first
+    const conn = hub.attach(ws, originOf(req), fwd || req.socket.remoteAddress || '');
     if (!conn) { ws.close(1013, 'server full'); return; }
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;

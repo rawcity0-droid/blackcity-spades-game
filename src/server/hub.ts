@@ -39,6 +39,8 @@ export interface Conn {
   chatTries: number[];
   /** Origin used for Stripe success/cancel URLs (from the upgrade request, or PUBLIC_BASE_URL). */
   baseUrl: string;
+  /** Client IP (for the owner-code lockout only; never logged). */
+  ip: string;
 }
 
 export interface HubOptions {
@@ -46,6 +48,8 @@ export interface HubOptions {
   billing?: Billing;
   /** Overrides CONFIG.ownerEmails (tests). */
   ownerEmails?: string[];
+  /** Overrides process.env.OWNER_CODE (tests). Must be exactly 6 digits, otherwise the owner code is off. */
+  ownerCode?: string;
   timings?: Partial<Timings>;
   devUnlock?: boolean;
   store?: SubscriptionStore;
@@ -77,6 +81,9 @@ export class Hub {
   readonly store: SubscriptionStore;
   readonly devUnlock: boolean;
   private ownerEmails: Set<string>;
+  private ownerCode: Buffer | null;
+  /** Wrong owner-code tries (timestamps), per player id and per IP. */
+  private codeFails = new Map<string, number[]>();
   readonly billing: Billing;
   private recheckTried = new Map<string, number>();
   private restoreTriesAll: number[] = [];
@@ -93,6 +100,8 @@ export class Hub {
     this.store = opts.store ?? new SubscriptionStore(null);
     this.devUnlock = !!opts.devUnlock;
     this.billing = opts.billing ?? new Billing({});
+    const code = opts.ownerCode ?? process.env.OWNER_CODE ?? '';
+    this.ownerCode = /^\d{6}$/.test(code) ? Buffer.from(code) : null;
     this.ownerEmails = new Set((opts.ownerEmails ?? CONFIG.ownerEmails).map((e) => e.trim().toLowerCase()).filter(Boolean));
     this.timings = { ...defaultTimings(), ...opts.timings };
     this.rng = opts.rng ?? secureRng;
@@ -101,10 +110,10 @@ export class Hub {
 
   // ---------- connection plumbing ----------
 
-  attach(ws: WebSocket, baseUrl = ''): Conn | null {
+  attach(ws: WebSocket, baseUrl = '', ip = ''): Conn | null {
     if (this.connections >= CONFIG.limits.maxConnections) return null;
     this.connections += 1;
-    return { ws, player: null, limiter: new RateLimiter(this.rate.burst, this.rate.perSecond), strikes: 0, restoreTries: [], confirmTries: [], checkoutTries: [], chatTries: [], baseUrl: CONFIG.publicBaseUrl || baseUrl };
+    return { ws, player: null, limiter: new RateLimiter(this.rate.burst, this.rate.perSecond), strikes: 0, restoreTries: [], confirmTries: [], checkoutTries: [], chatTries: [], baseUrl: CONFIG.publicBaseUrl || baseUrl, ip };
   }
 
   onMessage(conn: Conn, raw: string): void {
@@ -128,6 +137,7 @@ export class Hub {
           case 'restorePremium': this.guard(() => this.restorePremium(conn, p, msg.email), () => this.send(p.id, { t: 'restoreResult', ok: false, code: 'unreachable', message: UNREACHABLE })); return;
           case 'confirmPremium': this.guard(() => this.confirmPremium(conn, p, msg.sessionId), () => this.send(p.id, { t: 'premiumResult', ok: false, code: 'unreachable', message: UNREACHABLE })); return;
           case 'chat': this.chat(conn, p, msg.text); return;
+          case 'ownerCode': this.ownerCodeUnlock(conn, p, msg.code); return;
           case 'goPremium': this.guard(() => this.goPremium(conn, p), () => this.notice(p, 'error', 'Could not start checkout. Please try again in a moment.')); return;
           default: this.route(p, msg);
         }
@@ -1003,6 +1013,35 @@ export class Hub {
       return reply(true, 'ok', 'Premium restored (test mode, nothing was verified).');
     }
     return reply(false, 'not_found', 'That email doesn’t have active Premium on this server yet.');
+  }
+
+  /**
+   * Hidden owner panel: a correct OWNER_CODE (exactly 6 digits, from the environment) unlocks Premium on this device like
+   * the OWNER_EMAILS restore (no expiry). 5 wrong tries per 15 minutes per player and per IP, then locked out.
+   * The code is never logged or echoed. Exactly one ownerCodeResult per request.
+   */
+  private ownerCodeUnlock(conn: Conn, p: Player, code: string): void {
+    const reply = (ok: boolean, rcode: string, message: string) => this.send(p.id, { t: 'ownerCodeResult', ok, code: rcode, message });
+    if (!this.ownerCode) return reply(false, 'not_available', 'Not available.');
+    const now = Date.now();
+    const keys = ['p:' + p.id, ...(conn.ip ? ['ip:' + conn.ip] : [])];
+    const recent = (k: string) => {
+      const a = (this.codeFails.get(k) ?? []).filter((x) => now - x < CONFIG.ownerCodeWindowMs);
+      this.codeFails.set(k, a);
+      return a;
+    };
+    if (keys.some((k) => recent(k).length >= CONFIG.ownerCodeMaxFails)) return reply(false, 'locked', 'Too many wrong codes. Try again in 15 minutes.');
+    const given = Buffer.from(/^\d{6}$/.test(code) ? code : '------');
+    const ok = given.length === this.ownerCode.length && crypto.timingSafeEqual(given, this.ownerCode);
+    logActivity('owner_code_unlock', { ok });
+    if (!ok) {
+      for (const k of keys) recent(k).push(now);
+      const locked = keys.some((k) => recent(k).length >= CONFIG.ownerCodeMaxFails);
+      return reply(false, locked ? 'locked' : 'wrong', locked ? 'Too many wrong codes. Try again in 15 minutes.' : 'That code is not right.');
+    }
+    this.store.set(p.id, true, 'owner');
+    this.send(p.id, { t: 'subscription', subscribed: true });
+    return reply(true, 'ok', 'Premium unlocked on this device.');
   }
 
   private devToggle(p: Player): void {

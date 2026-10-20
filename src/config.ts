@@ -16,6 +16,9 @@ export function parseOwnerEmails(raw: string | undefined): string[] {
 export const CONFIG = {
   /** Emails that can unlock Premium through "Restore Premium" while payments are stubbed. Set OWNER_EMAILS on the host. */
   ownerEmails: parseOwnerEmails(process.env.OWNER_EMAILS),
+  /** Hidden owner panel (OWNER_CODE env var, read by the hub): wrong tries allowed per window, per player and per IP. */
+  ownerCodeMaxFails: 5,
+  ownerCodeWindowMs: 15 * 60000,
   restoreAttemptsPerMinute: 5,
 
   // Stripe billing (secrets are read from the environment in billing.ts / index.ts only, never kept here)
