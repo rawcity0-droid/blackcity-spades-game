@@ -52,6 +52,8 @@ export const CONFIG = {
   codeLength: 6,         // table / tournament / event join codes (letters and digits, no 0 O 1 I)
   tournamentTargetEarly: 250, // every round except the final
   tournamentTargetFinal: 500, // the final (set equal to the early value for "250 everywhere")
+  tournamentWinsEarly: 2, // bracket matches are series: every round except the final is best of 3 (first to 2 game wins)
+  tournamentWinsFinal: 3, // the final is best of 5 (first to 3 game wins)
 
   // Free vs paid. Anyone can WATCH any game and play Practice vs bots. Playing with other humans needs an invite from a
   // Premium host (their table / tournament code); Premium customers host tables, tournaments, brackets and invite others.
@@ -97,6 +99,11 @@ export const CONFIG = {
 } as const;
 
 /** Match target for a tournament round (0-based); the last round uses the final target. */
+/** Game wins needed to take a bracket series in this round. */
+export function tournamentWinsNeeded(round: number, totalRounds: number): number {
+  return round === totalRounds - 1 ? CONFIG.tournamentWinsFinal : CONFIG.tournamentWinsEarly;
+}
+
 export function tournamentTarget(round: number, totalRounds: number): number {
   return round === totalRounds - 1 ? CONFIG.tournamentTargetFinal : CONFIG.tournamentTargetEarly;
 }

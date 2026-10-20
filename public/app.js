@@ -693,7 +693,7 @@ function openBracketModal() {
   const f = { size: (cfg.tournamentSizes || [4, 8, 16])[0], teamMin4: true };
   const { el, body } = modalCard({ title: 'Create Bracket', id: 'bracket', cls: 'small' });
   body.append(
-    h('p', { class: 'lead', text: `A winner-advances bracket. Matches go to ${cfg.tournamentTargetEarly}; the final goes to ${cfg.tournamentTargetFinal}. Solo players are paired up and bots fill empty teams.` }),
+    h('p', { class: 'lead', text: `A winner-advances bracket. Every round is best of 3 (games to ${cfg.tournamentTargetEarly}); the final is best of 5 (games to ${cfg.tournamentTargetFinal}). Solo players are paired up and bots fill empty teams.` }),
     h('div', { class: 'field-label', text: 'Teams' }),
     seg((cfg.tournamentSizes || [4, 8, 16]).map((n) => [n, String(n)]), f.size, (v) => { f.size = v; }),
     ...bidRuleField(f),
@@ -769,7 +769,7 @@ function openRules() {
       `The first team to reach ${targets} points (set by the table) wins. A team that falls to ${r.loseScore} or lower loses at once.`,
       'If both teams reach the target in the same hand, the higher score wins. If the scores are exactly equal, play continues with more hands until one team is ahead.'),
     sec('Tournaments',
-      `Bracket: single elimination, random seeding. Matches go to ${cfg.tournamentTargetEarly}; the final goes to ${cfg.tournamentTargetFinal}. A team whose players all leave forfeits.`,
+      `Bracket: single elimination, random seeding. Every match is a series at the same table: best of 3 (first to 2 wins, games to ${cfg.tournamentTargetEarly}), and the final is best of 5 (first to 3 wins, games to ${cfg.tournamentTargetFinal}). A team whose players all leave forfeits.`,
       'Tournament (one to eight tables): everyone joins with the host’s code and is seated four to a table; bots fill empty seats. Each table plays one game and the winners are listed.',
       'Watching is always free. Free players can also tap Play now: you are matched with random players and seated at a table, but you cannot choose who you play with. To play with friends you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets and choose who plays.'));
   openModal('rules', el);
@@ -910,7 +910,8 @@ function renderTop(t) {
       h('div', { class: 'sbox-bags', text: noBags ? 'no sandbags' : `${bags} bags` }),
       stats ? h('div', { class: 'sbox-stats', text: stats }) : null);
   }));
-  const label = t ? (t.tournament ? t.tournament.label : `First to ${t.target}`) : 'First to 500';
+  const mineTeam = t && t.mySeat >= 0 ? t.mySeat % 2 : 0;
+  const label = t ? (t.tournament ? t.tournament.label + (t.series ? ` · ${t.series.wins[mineTeam]}–${t.series.wins[1 - mineTeam]}` : '') : `First to ${t.target}`) : 'First to 500';
   $('target-label').textContent = label;
   const acts = $('top-actions');
   if (!acts.firstChild) {
@@ -1119,7 +1120,7 @@ function renderAuto(t) {
     const me = t.mySeat >= 0 ? t.seats[t.mySeat] : null;
     setAuto(['sum', t.id, t.handNo, me && me.ready].join('|'), () => handSummary(t));
   } else if (t.phase === 'finished') {
-    setAuto(['over', t.id, t.winner, t.isHost].join('|'), () => gameOver(t));
+    setAuto(['over', t.id, t.winner, t.isHost, t.series ? t.series.wins.join('-') : ''].join('|'), () => gameOver(t));
   } else setAuto('', null);
 }
 
@@ -1211,6 +1212,12 @@ function handSummary(t) {
   return el;
 }
 
+/** "Series 1–0, first to 2" (wins in the given team order), or "Series won 2–1" when it is decided. */
+function seriesText(S, order) {
+  const a = S.wins[order[0]], b = S.wins[order[1]];
+  return S.decided ? `Series final ${a}–${b}` : `Series ${a}–${b}, first to ${S.need}`;
+}
+
 function gameOver(t) {
   const w = t.winner;
   const mine = t.mySeat >= 0 ? t.mySeat % 2 : null;
@@ -1218,11 +1225,16 @@ function gameOver(t) {
   let title = `${teamLabel(w)} win`;
   if (mine !== null) title = w === mine ? 'You win!' : 'They win this one';
   const order = mine !== null ? [mine, 1 - mine] : [0, 1];
-  const { el, body } = modalCard({ title, id: 'over', cls: 'small', onClose: () => send({ t: 'leaveTable' }) });
+  const S = t.series;
+  const midSeries = !!(t.tournament && S && !S.decided);
+  // Mid-series the X only hides this card: the next game starts at this table by itself, so closing never leaves the match.
+  const { el, body } = modalCard({ title, id: 'over', cls: 'small', onClose: midSeries ? () => closeModal('over') : () => send({ t: 'leaveTable' }) });
   body.append(
     t.forfeit ? h('p', { class: 'lead', text: 'The other team left the match, so this team advances.' }) : null,
     h('table', { class: 'sum' }, h('tbody', {}, order.map((team) => h('tr', {}, h('td', { text: teamLabel(team) }), h('td', { text: String(t.scores[team]) }))))),
-    t.tournament
+    t.tournament && S ? h('p', { class: 'lead center-text series-score', text: seriesText(S, order) }) : null,
+    midSeries ? h('p', { class: 'tiny center-text', text: `Game ${S.game} starts in a moment at this table…` })
+    : t.tournament
       ? h('p', { class: 'tiny center-text', text: 'Returning to the tournament in a moment…' })
       : h('div', { class: 'btn-row' },
         t.isHost ? btn('gold', 'Rematch', () => send({ t: 'rematch' })) : null,
@@ -1291,8 +1303,10 @@ function matchCard(m) {
     if (!t) return h('div', { class: 'mteam lose' }, h('span', { class: 'tn muted', text: 'To be decided' }));
     const done = m.winner !== null;
     return h('div', { class: `mteam${t.mine ? ' mine' : ''}${done ? (m.winner === idx ? ' win' : ' lose') : ''}` },
-      teamFaces(t), h('span', { class: 'tn', text: t.name }), h('span', { text: m.score ? String(m.score[idx]) : '' }));
+      teamFaces(t), h('span', { class: 'tn', text: t.name }),
+      h('span', { class: 'mwins', text: series ? String(m.wins[idx]) : m.score ? String(m.score[idx]) : '' }));
   };
+  const series = !!(m.wins && m.need);
   const foot = h('div', { class: 'mfoot' });
   if (m.status === 'live') {
     const mine = m.teams.some((t) => t && t.mine);
@@ -1303,6 +1317,7 @@ function matchCard(m) {
   } else {
     foot.append(h('span', { class: 'muted', text: m.teams[0] && m.teams[1] ? 'Starting…' : 'Waiting' }));
   }
+  if (series) foot.append(h('span', { class: 'muted mseries', text: `Best of ${m.bestOf} · Series ${m.wins[0]}–${m.wins[1]}${m.forfeit ? ' (forfeit)' : ''}` }));
   return h('div', { class: `match ${m.status}` }, teamRow(m.teams[0], 0), teamRow(m.teams[1], 1), foot);
 }
 

@@ -34,12 +34,16 @@ export type { ChatStyle } from './personas.js';
 export type Timings = { -readonly [K in keyof typeof CONFIG.timing]: number };
 export const defaultTimings = (): Timings => ({ ...CONFIG.timing });
 
+import type { SeriesInfo } from './tournament.js';
+
 export interface TableHooks {
   send(playerId: string, msg: object): void;
   changed(): void;
   destroyed(table: Table, participants: string[]): void;
   released(playerId: string, table: Table): void;
   matchOver?(table: Table, winner: Team, scores: [number, number], forfeit: boolean): void;
+  /** Bracket tables: a game of the series ended. Returns the series so far; null = not a series (events). */
+  gameEnded?(table: Table, winner: Team, scores: [number, number], forfeit: boolean): SeriesInfo | null;
 }
 
 export interface TableInit {
@@ -92,6 +96,8 @@ export class Table {
   chat: ChatLine[] = [];
   private chatSent = new Set<string>();      // people who already got the history since they (re)joined
   forfeit = false;
+  /** Bracket series score (null for normal tables and events). */
+  series: SeriesInfo | null = null;
   fastForward = false;
   teamHadHumans: [boolean, boolean] = [false, false];
 
@@ -403,8 +409,19 @@ export class Table {
     if (this.tournament && this.hooks.matchOver) {
       const winner = g.winner as Team;
       const wait = this.fastForward || forfeit ? Math.min(this.timings.matchEndPauseMs, forfeit ? 2000 : 0) : this.timings.matchEndPauseMs;
+      const s = this.hooks.gameEnded?.(this, winner, [g.scores[0], g.scores[1]], forfeit) ?? null;
+      if (s) this.series = s;
+      if (s && !s.decided) { this.endTimer = setTimeout(() => this.nextSeriesGame(), wait); return; } // same table, same players
       this.endTimer = setTimeout(() => this.hooks.matchOver?.(this, winner, [g.scores[0], g.scores[1]], forfeit), wait);
     }
+  }
+
+  /** Next game of a bracket series: same table, same seats (bots keep their personas). */
+  private nextSeriesGame(): void {
+    this.endTimer = null;
+    if (this.dead || this.status !== 'finished') return;
+    this.forfeit = false;
+    this.startGame();
   }
 
   /** Tournament forfeit: the other team wins at once. */
@@ -625,6 +642,7 @@ export class Table {
       winner: this.status === 'finished' && g ? g.winner : null,
       forfeit: this.forfeit,
       tournament: this.tournament ? { id: this.tournament.id, label: this.tournament.label } : null,
+      series: this.series,
     };
     if (g && me >= 0) {
       view.hand = g.hands[me];

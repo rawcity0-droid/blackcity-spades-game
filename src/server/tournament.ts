@@ -2,7 +2,7 @@
 // and automatic advancement. Human matches are played at real tables created through the host callback.
 // Team 0 of a match sits at seats 0&2, team 1 at seats 1&3.
 
-import { CONFIG, tournamentTarget } from '../config.js';
+import { CONFIG, tournamentTarget, tournamentWinsNeeded } from '../config.js';
 import { Rng, secureRng, shuffle } from '../engine/cards.js';
 import { simulateGame } from '../engine/sim.js';
 import { Persona, pickPersona } from './personas.js';
@@ -23,7 +23,13 @@ export interface Match {
   tableCode: string | null;
   target: number;
   simulated: boolean;
+  /** Series: game wins so far per side; the first side to reach `need` takes the match. */
+  wins: [number, number];
+  need: number;
+  forfeit: boolean;
 }
+
+export interface SeriesInfo { wins: [number, number]; need: number; decided: boolean; game: number }
 
 export type TState = 'registering' | 'running' | 'finished' | 'cancelled';
 type Result<T = object> = ({ ok: true } & T) | { ok: false; code: string; message: string };
@@ -173,6 +179,7 @@ export class Tournament {
         teams: [null, null] as [TeamRef | null, TeamRef | null],
         winner: null, score: null, status: 'waiting' as MatchStatus, tableId: null, tableCode: null,
         target: tournamentTarget(r, total), simulated: false,
+        wins: [0, 0] as [number, number], need: tournamentWinsNeeded(r, total), forfeit: false,
       })));
     }
     this.rounds[0].forEach((m, i) => { m.teams = [seeded[2 * i], seeded[2 * i + 1]]; });
@@ -188,16 +195,37 @@ export class Tournament {
     if (m.status !== 'waiting' || !m.teams[0] || !m.teams[1]) return;
     const hasHuman = m.teams.some((t) => t?.slots.some((s) => s.playerId !== null));
     if (!hasHuman) {
-      const res = simulateGame({ target: m.target, rng: this.rng });
       m.simulated = true;
-      this.complete(m, res.winner, res.scores);
-      return;
+      for (;;) { // play the whole series instantly
+        const res = simulateGame({ target: m.target, rng: this.rng });
+        m.wins[res.winner]++;
+        m.score = [res.scores[0], res.scores[1]];
+        if (m.wins[res.winner] >= m.need) { this.complete(m, res.winner, res.scores); return; }
+      }
     }
-    const label = `${roundName(this.size, m.round)} · to ${m.target}`;
+    const label = `${roundName(this.size, m.round)} · best of ${2 * m.need - 1} · to ${m.target}`;
     const table = this.host.createMatchTable(this, m, label);
     m.tableId = table.id;
     m.tableCode = table.code;
     m.status = 'live';
+  }
+
+  /** One game of a live series ended at its table. Records the win (a forfeit decides the series at once) and
+   *  says whether the series is decided. The bracket only advances later, through matchResult, so the game-over
+   *  screen can be shown first. */
+  recordGame(matchId: string, winner: 0 | 1, score: [number, number], forfeit: boolean): SeriesInfo | null {
+    const m = this.findMatch(matchId);
+    if (!m || m.status !== 'live' || this.state !== 'running') return null;
+    if (forfeit) m.forfeit = true;
+    else m.wins[winner]++;
+    m.score = [score[0], score[1]];
+    this.host.changed(this);
+    return this.series(m);
+  }
+
+  series(m: Match): SeriesInfo {
+    const decided = m.forfeit || m.wins[0] >= m.need || m.wins[1] >= m.need;
+    return { wins: [m.wins[0], m.wins[1]], need: m.need, decided, game: m.wins[0] + m.wins[1] + (decided ? 0 : 1) };
   }
 
   /** Record a finished match (from a real table or a simulation) and advance the winner. */
@@ -254,11 +282,16 @@ export class Tournament {
       rounds: this.rounds.map((r, ri) => ({
         name: roundName(this.size, ri),
         target: tournamentTarget(ri, this.totalRounds),
+        bestOf: 2 * tournamentWinsNeeded(ri, this.totalRounds) - 1,
         matches: r.map((m) => ({
           id: m.id,
           teams: [teamView(m.teams[0]), teamView(m.teams[1])],
           winner: m.winner,
           score: m.score,
+          wins: m.wins,
+          need: m.need,
+          bestOf: 2 * m.need - 1,
+          forfeit: m.forfeit,
           status: m.status,
           simulated: m.simulated,
           tableId: m.status === 'live' ? m.tableId : null,

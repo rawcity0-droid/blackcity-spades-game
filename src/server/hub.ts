@@ -392,6 +392,10 @@ export class Hub {
         destroyed: (t, people) => this.tableDestroyed(t, people),
         released: (pid, t) => this.releasePlayer(pid, t),
         matchOver: (t, winner, scores, forfeit) => this.matchOver(t, winner, scores, forfeit),
+        gameEnded: (t, winner, scores, forfeit) => {
+          const tour = t.tournament ? this.tournaments.get(t.tournament.id) : undefined;
+          return tour && t.tournament ? tour.recordGame(t.tournament.matchId, winner, scores, forfeit) : null;
+        },
       },
     });
     this.tables.set(id, table);
@@ -701,6 +705,7 @@ export class Hub {
         pl.tableId = table.id;
       });
     });
+    table.series = t.series(m);
     table.startGame();
     return { id: table.id, code: table.code };
   }
