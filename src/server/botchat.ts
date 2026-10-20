@@ -117,11 +117,12 @@ export class BotChat {
 
   // ---- game events ----
 
-  onBid(seat: number, bid: number): void {
+  /** nil: false when a 0 is a plain zero (team-minimum tables), so the Nil lines stay quiet. */
+  onBid(seat: number, bid: number, nil = true): void {
     if (!this.ready() || this.cooling()) return;
     const bots = this.host.bots();
     const trash = this.trashOpponent(seat);
-    if (bid === 0 && this.chance(0.7)) return trash ? this.sayAs(trash, TRASH_LINES.nil) : this.sayOne(this.pickOther(bots, seat), NIL);
+    if (bid === 0 && nil && this.chance(0.7)) return trash ? this.sayAs(trash, TRASH_LINES.nil) : this.sayOne(this.pickOther(bots, seat), NIL);
     if (bid >= 7 && this.chance(0.5)) return trash ? this.sayAs(trash, TRASH_LINES.bigBid, { N: String(bid) }) : this.sayOne(this.pickOther(bots, seat), BIG_BID, { N: String(bid) });
   }
 

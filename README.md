@@ -386,3 +386,7 @@ Premium hosts pick the bidding rule: **Team min 4** (default; partners must bid 
 (no minimum). Clients send `teamMin4` (boolean, missing = true) on `createTable`, `createTournament` and `createEvent`; a hosted table's host can also
 flip it with `setRules { teamMin4 }` in the table lobby before the game starts. Tournament and event tables all use the organizer's choice, and their
 views carry `teamMin` for the label. Free Play now (quick) and practice tables always use regular bidding; Premium "Quick play at a public table" is unchanged (team min 4).
+On team-minimum tables (`teamMin > 0`: Premium hosted tables, brackets, events and Premium Quick play) there is no Nil. Players bid 0 to 13; the first
+partner may bid anything (including 0) and the second must reach the minimum (after a 0 that means 4+). A 0 is a plain zero: no ±100, the player's tricks
+count toward the team, and the team contract (sum of both bids) is scored normally (made/set, overtricks are bags). The client shows "0" instead of "Nil",
+bots only bid 0 on a hopeless hand after their partner already bid 4+, and the Nil chat lines and Nil play logic are off. Free Play now and Regular bidding keep real Nil.

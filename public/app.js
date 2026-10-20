@@ -755,7 +755,7 @@ function openRules() {
       `A game is played over several hands. The first team to reach the target score wins. Tables play to ${targets}.`),
     sec('Bidding',
       `Starting left of the dealer, each player bids how many tricks they expect to win. You can bid from ${bid.minBid} to ${bid.maxBid}${bid.allowNil ? ', or bid Nil (0)' : ''}. You can’t change a bid.`,
-      'Premium hosts choose the bidding rule for their tables, tournaments and brackets. With Team min 4 (the default) the two partners must bid at least 4 together: one partner can bid 1, 2 or 3 as long as the pair reaches 4, and the second partner to bid can’t go below what is needed. With Regular bidding there is no minimum. Free Play now games always use regular spades bidding.',
+      'Premium hosts choose the bidding rule for their tables, tournaments and brackets. With Team min 4 (the default) there is no Nil: each player bids 0 to 13 and the two partners must bid at least 4 together. The first partner can bid anything, including 0; the second can’t go below what is needed (after a 0 that means 4 or more). A 0 there is a plain zero: no bonus or penalty, and that player’s tricks count toward the team bid. With Regular bidding there is no minimum and Nil works as below. Free Play now games always use regular spades bidding.',
       `Partners’ bids are added together into one team contract.${bid.allowNil ? ' A Nil bid is separate from the contract.' : ''}`),
     sec('Playing a hand',
       'The player left of the dealer leads. You must follow the suit that was led if you can. If you can’t, play any card, including a spade.',
@@ -764,7 +764,7 @@ function openRules() {
     sec('Scoring a hand',
       'Making your team bid scores 10 points per bid trick. Falling short loses 10 points per bid trick.',
       `Each trick over the bid is a bag: +1 point each. With sandbags on, collecting ${r.bagLimit} bags costs ${r.bagPenalty} points and takes ${r.bagLimit} off your bag count. The host can turn sandbags off: then bags are not counted and there is no penalty.`,
-      ...(bid.allowNil ? [`Nil: a player who bids Nil and takes no tricks scores +${r.nilBonus}. If they take any trick it is −${r.nilBonus}. A Nil bidder’s tricks never count toward their partner’s bid; if the Nil fails those tricks become bags.`] : [])),
+      ...(bid.allowNil ? [`Nil (regular bidding tables): a player who bids Nil and takes no tricks scores +${r.nilBonus}. If they take any trick it is −${r.nilBonus}. A Nil bidder’s tricks never count toward their partner’s bid; if the Nil fails those tricks become bags.`] : [])),
     sec('Winning',
       `The first team to reach ${targets} points (set by the table) wins. A team that falls to ${r.loseScore} or lower loses at once.`,
       'If both teams reach the target in the same hand, the higher score wins. If the scores are exactly equal, play continues with more hands until one team is ahead.'),
@@ -867,7 +867,8 @@ function render() {
 const SEAT_DIR = ['North', 'East', 'South', 'West'];
 const teamOfSeat = (i) => i % 2;
 
-function bidLabel(bid) { return bid === 0 ? 'Nil' : `Bid ${bid}`; }
+/** On team-minimum tables a 0 is a plain zero, not Nil. */
+function bidLabel(bid, t) { return bid === 0 && !bidRules(t).teamMin ? 'Nil' : `Bid ${bid}`; }
 
 /** "bid 7 · won 3" for a partnership; the bid shows from the moment each partner has bid. */
 function teamStats(t, team) {
@@ -914,7 +915,7 @@ function seatStatus(t, i) {
   if (t.phase === 'waiting') return { text: s.kind === 'bot' ? 'Bot' : i === t.hostSeat ? 'Host' : 'Joined' };
   const hasBid = s.bid !== null && s.bid !== undefined;
   const parts = [];
-  if (hasBid) parts.push(['bid', bidLabel(s.bid)]);
+  if (hasBid) parts.push(['bid', bidLabel(s.bid, t)]);
   else if (t.phase === 'bidding') parts.push(['', t.turn === i ? 'Bidding…' : 'Waiting to bid']);
   if (hasBid && t.phase !== 'bidding') parts.push(['won', `won ${s.tricks}`]);
   if (s.botControlled && t.phase !== 'finished') parts.push(['', 'bot']);
@@ -1016,12 +1017,13 @@ function bidPanel(t) {
   const { minBid, maxBid, allowNil, teamMin } = bidRules(t);
   const partnerBid = partner.bid !== null && partner.bid !== undefined ? partner.bid : null;
   const needed = teamMin && partnerBid !== null ? Math.max(0, teamMin - partnerBid) : 0; // lowest bid that still lets the pair reach the team minimum
-  if (allowNil) grid.append(h('button', { class: 'bidbtn nil', type: 'button', text: 'Nil', 'aria-label': 'Bid Nil (zero)', disabled: needed > 0, onclick: () => send({ t: 'bid', bid: 0 }) }));
-  for (let n = minBid; n <= maxBid; n++) grid.append(h('button', { class: 'bidbtn', type: 'button', text: String(n), disabled: n < needed, onclick: () => send({ t: 'bid', bid: n }) }));
-  const teamNote = teamMin ? (needed > 0 ? `Your team must bid at least ${teamMin} together, so bid ${needed} or more` : `Your team must bid at least ${teamMin} together`) : null;
+  if (teamMin) grid.append(h('button', { class: 'bidbtn', type: 'button', text: '0', 'aria-label': 'Bid 0 (no books, not Nil)', disabled: needed > 0, onclick: () => send({ t: 'bid', bid: 0 }) }));
+  else if (allowNil) grid.append(h('button', { class: 'bidbtn nil', type: 'button', text: 'Nil', 'aria-label': 'Bid Nil (zero)', disabled: needed > 0, onclick: () => send({ t: 'bid', bid: 0 }) }));
+  for (let n = Math.max(minBid, 1); n <= maxBid; n++) grid.append(h('button', { class: 'bidbtn', type: 'button', text: String(n), disabled: n < needed, onclick: () => send({ t: 'bid', bid: n }) }));
+  const teamNote = teamMin ? (needed > 0 ? `Your team must bid at least ${teamMin} together, so bid ${needed} or more` : `Your team must bid at least ${teamMin} together. 0 means no books (no Nil at this table)`) : null;
   return h('div', { class: 'bidpanel' },
     h('div', { class: 'bid-title' }, h('b', { text: 'Your bid' }),
-      h('span', { text: partnerBid !== null ? `Partner bid ${partnerBid === 0 ? 'Nil' : partnerBid}` : 'Partner has not bid yet' })),
+      h('span', { text: partnerBid !== null ? `Partner bid ${partnerBid === 0 && !teamMin ? 'Nil' : partnerBid}` : 'Partner has not bid yet' })),
     grid,
     teamNote ? h('div', { class: 'tiny center-text', text: teamNote }) : null);
 }

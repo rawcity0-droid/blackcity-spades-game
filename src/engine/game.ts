@@ -128,9 +128,11 @@ export function legalBids(g?: GameState, seat?: number): number[] {
   const bids = Array.from({ length: maxBid - minBid + 1 }, (_, i) => minBid + i);
   const all = allowNil ? [0, ...bids] : bids;
   if (!g || seat === undefined || !g.teamMin) return all;
+  // Team-minimum tables have no Nil: any bid 0..maxBid, where 0 is a plain zero ("no books") that counts in the team contract.
+  const zeroUp = bids.includes(0) ? bids : [0, ...bids];
   const partnerBid = g.bids[partnerOf(seat)];
-  if (partnerBid === null || partnerBid === undefined) return all;
-  return all.filter((b) => b + partnerBid >= g.teamMin);
+  if (partnerBid === null || partnerBid === undefined) return zeroUp;
+  return zeroUp.filter((b) => b + partnerBid >= g.teamMin);
 }
 
 export function placeBid(g: GameState, seat: number, bid: number): void {
@@ -224,6 +226,7 @@ export function scoreTeam(
   tricks: number[],
   bagsBefore: number,
   sandbags = true,
+  nilAllowed = true, // false on team-minimum tables: a 0 bid is a plain zero, part of the team contract (no Nil bonus or penalty)
 ): { result: TeamHandResult; bagsAfter: number } {
   let bid = 0;
   let won = 0;
@@ -231,7 +234,7 @@ export function scoreTeam(
   const nil: { seat: number; made: boolean }[] = [];
   let nilPoints = 0;
   for (const s of seats) {
-    if (bids[s] === 0) {
+    if (bids[s] === 0 && nilAllowed) {
       const made = tricks[s] === 0;
       nil.push({ seat: s, made });
       nilPoints += made ? NIL_BONUS : -NIL_BONUS;
@@ -280,8 +283,8 @@ export function gameWinner(scores: [number, number], target: number): Team | nul
 
 function finishHand(g: GameState): void {
   const bids = g.bids.map((b) => b ?? 0);
-  const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0], g.sandbags);
-  const t1 = scoreTeam([1, 3], bids, g.tricksWon, g.bags[1], g.sandbags);
+  const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0], g.sandbags, !g.teamMin);
+  const t1 = scoreTeam([1, 3], bids, g.tricksWon, g.bags[1], g.sandbags, !g.teamMin);
   g.scores = [g.scores[0] + t0.result.delta, g.scores[1] + t1.result.delta];
   g.bags = [t0.bagsAfter, t1.bagsAfter];
   g.lastHand = {

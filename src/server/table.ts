@@ -372,7 +372,7 @@ export class Table {
     if (!g || this.status !== 'playing' || this.pause) return fail('wrong_state', 'Not now');
     if (this.seats[i].botControlled) return fail('wrong_state', 'A bot is playing your seat until the next hand');
     try { placeBid(g, i, bid); } catch (e) { return this.engineFail(e); }
-    this.botChat.onBid(i, bid);
+    this.botChat.onBid(i, bid, !this.teamMin);
     this.broadcast();
     this.advance();
     return { ok: true };
@@ -398,7 +398,7 @@ export class Table {
   private afterPlay(out: PlayOutcome): void {
     if (out.trick) {
       const w = out.trick.winner;
-      const nilBust = this.game?.bids[w] === 0 && this.game.tricksWon[w] === 1; // a Nil bid just took its first trick
+      const nilBust = !this.teamMin && this.game?.bids[w] === 0 && this.game.tricksWon[w] === 1; // a Nil bid just took its first trick
       this.botChat.onTrick(w, nilBust);
     }
     if (out.handDone && this.game?.lastHand) { const r = this.game.lastHand.teams; this.botChat.onHandEnd([r[0].made, r[1].made]); }
@@ -497,7 +497,7 @@ export class Table {
       if (g.phase === 'bidding') {
         const bid = chooseBid(g, seat, this.skillOf(seat));
         placeBid(g, seat, bid);
-        if (s.kind === 'bot') this.botChat.onBid(seat, bid);
+        if (s.kind === 'bot') this.botChat.onBid(seat, bid, !this.teamMin);
         if (s.kind === 'human') s.botActed = true;
         this.broadcast();
         this.advance();

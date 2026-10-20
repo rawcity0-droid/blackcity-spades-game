@@ -44,6 +44,12 @@ export function chooseBid(g: GameState, seat: number, skill: Skill = 'normal'): 
   const highSpade = spades.some((c) => rankOf(c) >= TEN);
   const highCards = hand.filter((c) => rankOf(c) >= KING).length;
   const partnerBid = g.bids[partnerOf(seat)];
+  // Team-minimum tables: 0 is a plain zero, not Nil. Only bid it on a hopeless hand when partner already covered the minimum.
+  if (g.teamMin > 0) {
+    const plainZero = est < 0.6 && partnerBid !== null && partnerBid !== undefined && partnerBid >= g.teamMin && legalBids(g, seat).includes(0);
+    if (plainZero) return 0;
+    return bidFrom(g, seat, Math.round(est));
+  }
   if (skill === 'strong') return strongBid(g, seat, est, spades.length, highSpade);
   if (CONFIG.rules.allowNil && est < 1.1 && spades.length <= 2 && !highSpade && highCards <= 1 && partnerBid !== 0 && legalBids(g, seat).includes(0)) return 0;
 
@@ -60,7 +66,7 @@ function tricksStillNeeded(g: GameState, seat: number): number {
   for (let s = 0; s < 4; s++) {
     if (teamOf(s) !== team) continue;
     const bid = g.bids[s] ?? 0;
-    if (bid > 0) need += bid - g.tricksWon[s];
+    if (bid > 0 || g.teamMin > 0) need += bid - g.tricksWon[s]; // a plain zero (team-min tables) still counts its tricks for the team
   }
   return need;
 }
@@ -87,8 +93,9 @@ export function choosePlay(g: GameState, seat: number, skill: Skill = 'normal'):
 /** The plain heuristic (normal bots, and the fallback for strong bots). */
 function normalPlay(g: GameState, seat: number, legal: Card[]): Card {
   const partner = partnerOf(seat);
-  const iAmNil = g.bids[seat] === 0;
-  const partnerNilAlive = g.bids[partner] === 0 && g.tricksWon[partner] === 0;
+  const nilGame = !g.teamMin; // team-minimum tables have no Nil: a 0 bid is a plain zero
+  const iAmNil = nilGame && g.bids[seat] === 0;
+  const partnerNilAlive = nilGame && g.bids[partner] === 0 && g.tricksWon[partner] === 0;
   const wantTricks = tricksStillNeeded(g, seat) > 0;
   const nonSpades = legal.filter((c) => suitOf(c) !== 'S');
 
@@ -200,9 +207,10 @@ function strongPlay(g: GameState, seat: number, legal: Card[]): Card {
   const unseen = unseenCards(g, seat);
   const vd = voids(g);
   const spadesOut = [...unseen].some((c) => suitOf(c) === 'S');
-  const iAmNil = g.bids[seat] === 0;
-  const partnerNilAlive = g.bids[partner] === 0 && g.tricksWon[partner] === 0;
-  const oppNil = opps.filter((o) => g.bids[o] === 0 && g.tricksWon[o] === 0);
+  const nilGame = !g.teamMin; // team-minimum tables have no Nil: a 0 bid is a plain zero
+  const iAmNil = nilGame && g.bids[seat] === 0;
+  const partnerNilAlive = nilGame && g.bids[partner] === 0 && g.tricksWon[partner] === 0;
+  const oppNil = opps.filter((o) => nilGame && g.bids[o] === 0 && g.tricksWon[o] === 0);
   const wantTricks = tricksStillNeeded(g, seat) > 0;
   const nonSpades = legal.filter((c) => suitOf(c) !== 'S');
 
