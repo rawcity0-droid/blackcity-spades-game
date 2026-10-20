@@ -68,6 +68,12 @@ function tricksStillNeeded(g: GameState, seat: number): number {
     const bid = g.bids[s] ?? 0;
     if (bid > 0 || g.teamMin > 0) need += bid - g.tricksWon[s]; // a plain zero (team-min tables) still counts its tricks for the team
   }
+  if (g.teamMin > 0) {
+    // the team plays for the board: max(combined bid, teamMin)
+    let sum = 0, won = 0;
+    for (let s = 0; s < 4; s++) if (teamOf(s) === team) { sum += g.bids[s] ?? 0; won += g.tricksWon[s]; }
+    return Math.max(sum, g.teamMin) - won;
+  }
   return need;
 }
 

@@ -48,21 +48,9 @@ test('Premium-hosted table: partners must bid 4 together, so a second bid that l
     c.send({ t: 'startTable' });
     const t = await c.waitFor((m) => m.t === 'table' && m.canBid, 8000, true);
     assert.equal(t.bidRules.teamMin, 4);
-    const partner = t.seats[(t.mySeat + 2) % 4].bid;
-    if (partner === null || partner === undefined) {
-      c.send({ t: 'bid', bid: 1 }); // the first of the pair may bid 1, 2 or 3
-      const ok = await c.waitFor((m) => m.t === 'table' && m.seats[m.mySeat].bid === 1, 8000, true);
-      assert.equal(ok.seats[ok.mySeat].bid, 1);
-    } else {
-      const needed = Math.max(0, 4 - partner);
-      if (needed >= 1) {
-        c.send({ t: 'bid', bid: needed - 1 });
-        await c.waitFor((m) => m.t === 'error' && /at least 4 together/.test(m.message));
-      }
-      c.send({ t: 'bid', bid: needed });
-      const ok = await c.waitFor((m) => m.t === 'table' && m.seats[m.mySeat].bid === needed, 8000, true);
-      assert.equal(ok.seats[ok.mySeat].bid, needed);
-    }
+    c.send({ t: 'bid', bid: 0 }); // no individual limit on team-min tables, whatever the partner bid
+    const ok = await c.waitFor((m) => m.t === 'table' && m.seats[m.mySeat].bid === 0, 8000, true);
+    assert.equal(ok.seats[ok.mySeat].bid, 0);
     c.close();
   } finally { await srv.close(); }
 });

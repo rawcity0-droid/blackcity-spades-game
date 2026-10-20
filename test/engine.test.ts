@@ -60,25 +60,24 @@ test('regular bidding (free games): 1 to 13 plus Nil, no minimum; order is left 
   assert.deepEqual(g.bids, [1, 0, 13, 1]);
 });
 
-test('Premium team rule: partners must bid at least 4 together, any split, and the second to bid cannot go below what is needed', () => {
+test('Premium team rule: no individual limit, every player (including the last partner) may bid 0..13', () => {
   const g = createGame({ rng: mulberry32(2), dealer: 0, teamMin: 4 });
   assert.equal(g.turn, 1);
   // the first player of a team is free: 1, 2, 3 are fine
   assert.deepEqual(legalBids(g, 1), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   placeBid(g, 1, 1);
   placeBid(g, 2, 13); // seat 2 bids first for the other team: free
-  // seat 3 is the partner of seat 1 (who bid 1): needs at least 3, and Nil is closed
-  assert.deepEqual(legalBids(g, 3), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-  assert.throws(() => placeBid(g, 3, 2), /at least 4 together, so bid 3 or more/);
-  assert.throws(() => placeBid(g, 3, 0), /bid 3 or more/);
-  placeBid(g, 3, 3);
+  // seat 3 is the partner of seat 1 (who bid 1): still free, 0 included (the team plays for a board of 4)
+  assert.deepEqual(legalBids(g, 3), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  assert.throws(() => placeBid(g, 3, 14), /Bid must be 0 to 13/);
+  placeBid(g, 3, 0);
   // seat 0 is the partner of seat 2 (13): any bid is fine, Nil included
   assert.deepEqual(legalBids(g, 0), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   placeBid(g, 0, 0);
   assert.equal(g.phase, 'playing');
 });
 
-test('Premium team rule: 2 and 2, 1 and 3, Nil needs a full 4 from the partner, and a partner Nil means the other bids 4+', () => {
+test('Premium team rule: any split is allowed, including totals under 4 (the board covers it)', () => {
   const pair = (first: number, second: number) => {
     const g = createGame({ rng: mulberry32(5), dealer: 0, teamMin: 4 });
     placeBid(g, 1, first); placeBid(g, 2, 4); // seat 1 first, seat 3 is its partner
@@ -89,8 +88,9 @@ test('Premium team rule: 2 and 2, 1 and 3, Nil needs a full 4 from the partner, 
   assert.equal(pair(1, 3).bids[3], 3);
   assert.equal(pair(3, 1).bids[3], 1);
   assert.equal(pair(4, 0).bids[3], 0, 'after a 4 the partner may go Nil');
-  assert.throws(() => pair(3, 0), EngineError, 'after a 3 Nil is closed');
-  assert.throws(() => pair(0, 3), EngineError, 'after a Nil the partner must bid 4');
+  assert.equal(pair(3, 0).bids[3], 0, 'after a 3 the partner may bid 0');
+  assert.equal(pair(0, 3).bids[3], 3, 'after a 0 the partner may bid 3');
+  assert.equal(pair(1, 0).bids[3], 0, 'after a 1 the partner may bid 0');
   assert.equal(pair(0, 4).bids[3], 4);
 });
 
@@ -107,7 +107,6 @@ test('with allowNil off even 0 is rejected, and bots follow the team rule', () =
     for (const teamMin of [0, 4]) {
       const x = createGame({ rng: mulberry32(seed), dealer: seed % 4, teamMin });
       while (x.phase === 'bidding') { const b = chooseBid(x, x.turn); assert.ok(legalBids(x, x.turn).includes(b), `bot bid ${b}`); placeBid(x, x.turn, b); }
-      if (teamMin) for (const [a, b] of [[0, 2], [1, 3]]) assert.ok(x.bids[a]! + x.bids[b]! >= 4, `team total ${x.bids[a]! + x.bids[b]!} (seed ${seed})`);
     }
   }
 });

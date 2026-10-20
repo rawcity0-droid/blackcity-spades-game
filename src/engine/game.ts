@@ -24,6 +24,7 @@ export interface CompletedTrick { plays: TrickPlay[]; winner: number }
 
 export interface TeamHandResult {
   bid: number;            // combined bid of the non-nil players
+  contract?: number;      // team-minimum tables: max(bid, teamMin), the "board" the team must make
   tricks: number;         // tricks taken by the non-nil players
   made: boolean | null;   // null when the team had no non-nil bid
   contractPoints: number; // +10/bid trick if made, -10/bid trick if set
@@ -120,8 +121,8 @@ export function nextHand(g: GameState): void {
 
 /**
  * Bids a player may make: minBid..maxBid (CONFIG.rules), plus 0 = Nil when CONFIG.rules.allowNil.
- * With a game and a seat, a team minimum (g.teamMin) is applied too: once a partner has bid, this player's bid plus the partner's must reach it
- * (Nil counts as 0, so after a partner's Nil the bid must be the whole minimum, and Nil is only open when the partner already reached it).
+ * With a game and a seat on a team-minimum table (g.teamMin), every player may bid 0..maxBid (0 is a plain zero, no Nil).
+ * There is no per-player minimum: the team's contract is raised to the board (max(sum, teamMin)) at scoring time.
  */
 export function legalBids(g?: GameState, seat?: number): number[] {
   const { minBid, maxBid, allowNil } = CONFIG.rules;
@@ -129,10 +130,7 @@ export function legalBids(g?: GameState, seat?: number): number[] {
   const all = allowNil ? [0, ...bids] : bids;
   if (!g || seat === undefined || !g.teamMin) return all;
   // Team-minimum tables have no Nil: any bid 0..maxBid, where 0 is a plain zero ("no books") that counts in the team contract.
-  const zeroUp = bids.includes(0) ? bids : [0, ...bids];
-  const partnerBid = g.bids[partnerOf(seat)];
-  if (partnerBid === null || partnerBid === undefined) return zeroUp;
-  return zeroUp.filter((b) => b + partnerBid >= g.teamMin);
+  return bids.includes(0) ? bids : [0, ...bids];
 }
 
 export function placeBid(g: GameState, seat: number, bid: number): void {
@@ -140,11 +138,7 @@ export function placeBid(g: GameState, seat: number, bid: number): void {
   if (seat !== g.turn) throw new EngineError('Not your turn');
   if (!legalBids(g, seat).includes(bid)) {
     const { minBid, maxBid, allowNil } = CONFIG.rules;
-    const partnerBid = g.bids[partnerOf(seat)];
-    if (g.teamMin && partnerBid !== null && partnerBid !== undefined && legalBids().includes(bid)) {
-      const need = Math.max(0, g.teamMin - partnerBid);
-      throw new EngineError(`You and your partner must bid at least ${g.teamMin} together, so bid ${need} or more`);
-    }
+    if (g.teamMin) throw new EngineError(`Bid must be 0 to ${maxBid}`);
     throw new EngineError(`Bid must be ${minBid} to ${maxBid}${allowNil ? ' (or Nil)' : ''}`);
   }
   g.bids[seat] = bid;
@@ -227,6 +221,7 @@ export function scoreTeam(
   bagsBefore: number,
   sandbags = true,
   nilAllowed = true, // false on team-minimum tables: a 0 bid is a plain zero, part of the team contract (no Nil bonus or penalty)
+  board = 0, // team-minimum tables: the contract is max(combined bid, board)
 ): { result: TeamHandResult; bagsAfter: number } {
   let bid = 0;
   let won = 0;
@@ -247,13 +242,14 @@ export function scoreTeam(
   let made: boolean | null = null;
   let contractPoints = 0;
   let overtricks = 0;
-  if (bid > 0) {
-    made = won >= bid;
+  const contract = board > 0 ? Math.max(bid, board) : bid;
+  if (contract > 0) {
+    made = won >= contract;
     if (made) {
-      contractPoints = 10 * bid;
-      overtricks = won - bid;
+      contractPoints = 10 * contract;
+      overtricks = won - contract;
     } else {
-      contractPoints = -10 * bid;
+      contractPoints = -10 * contract;
     }
   }
   const bagsGained = sandbags ? overtricks + nilTricks : 0;
@@ -265,7 +261,7 @@ export function scoreTeam(
   }
   const delta = contractPoints + bagsGained + nilPoints + bagPenalty;
   return {
-    result: { bid, tricks: won, made, contractPoints, bagsGained, nilPoints, nil, bagPenalty, delta },
+    result: { bid, ...(board > 0 ? { contract } : {}), tricks: won, made, contractPoints, bagsGained, nilPoints, nil, bagPenalty, delta },
     bagsAfter: bags,
   };
 }
@@ -283,8 +279,8 @@ export function gameWinner(scores: [number, number], target: number): Team | nul
 
 function finishHand(g: GameState): void {
   const bids = g.bids.map((b) => b ?? 0);
-  const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0], g.sandbags, !g.teamMin);
-  const t1 = scoreTeam([1, 3], bids, g.tricksWon, g.bags[1], g.sandbags, !g.teamMin);
+  const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0], g.sandbags, !g.teamMin, g.teamMin);
+  const t1 = scoreTeam([1, 3], bids, g.tricksWon, g.bags[1], g.sandbags, !g.teamMin, g.teamMin);
   g.scores = [g.scores[0] + t0.result.delta, g.scores[1] + t1.result.delta];
   g.bags = [t0.bagsAfter, t1.bagsAfter];
   g.lastHand = {

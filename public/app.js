@@ -678,7 +678,7 @@ function openEventModal() {
   openModal('event', el);
 }
 
-/** Premium host's bidding rule: partners must bid at least 4 together (default) or regular spades bidding. */
+/** Premium host's bidding rule: Team min 4 (default; team contract is at least a board of 4) or regular spades bidding. */
 function bidRuleField(f) {
   return [
     h('div', { class: 'field-label', text: 'Bidding' }),
@@ -755,7 +755,7 @@ function openRules() {
       `A game is played over several hands. The first team to reach the target score wins. Tables play to ${targets}.`),
     sec('Bidding',
       `Starting left of the dealer, each player bids how many tricks they expect to win. You can bid from ${bid.minBid} to ${bid.maxBid}${bid.allowNil ? ', or bid Nil (0)' : ''}. You can’t change a bid.`,
-      'Premium hosts choose the bidding rule for their tables, tournaments and brackets. With Team min 4 (the default) there is no Nil: each player bids 0 to 13 and the two partners must bid at least 4 together. The first partner can bid anything, including 0; the second can’t go below what is needed (after a 0 that means 4 or more). A 0 there is a plain zero: no bonus or penalty, and that player’s tricks count toward the team bid. With Regular bidding there is no minimum and Nil works as below. Free Play now games always use regular spades bidding.',
+      'Premium hosts choose the bidding rule for their tables, tournaments and brackets. With Team min 4 (the default) there is no Nil: every player can bid anything from 0 to 13, and the team always plays for at least 4 books (a board of 4): if the partners bid less than 4 together, the team contract is 4. A 0 there is a plain zero: no bonus or penalty, and that player’s tricks count toward the team bid. With Regular bidding there is no minimum and Nil works as below. Free Play now games always use regular spades bidding.',
       `Partners’ bids are added together into one team contract.${bid.allowNil ? ' A Nil bid is separate from the contract.' : ''}`),
     sec('Playing a hand',
       'The player left of the dealer leads. You must follow the suit that was led if you can. If you can’t, play any card, including a spade.',
@@ -889,7 +889,8 @@ function teamStats(t, team) {
   const made = seats.filter((i) => t.seats[i].bid !== null && t.seats[i].bid !== undefined);
   if (!made.length) return '';
   const bid = made.reduce((a, i) => a + t.seats[i].bid, 0);
-  const text = `bid ${bid}${made.length < 2 ? '…' : ''}`;
+  const board = bidRules(t).teamMin;
+  const text = `bid ${bid}${made.length < 2 ? '…' : board && bid < board ? ` (board ${board})` : ''}`;
   if (t.phase === 'bidding' || t.phase === 'waiting' || made.length < 2) return text;
   return `${text} · won ${seats.reduce((a, i) => a + t.seats[i].tricks, 0)}`;
 }
@@ -1029,11 +1030,11 @@ function bidPanel(t) {
   const grid = h('div', { class: 'bidgrid' });
   const { minBid, maxBid, allowNil, teamMin } = bidRules(t);
   const partnerBid = partner.bid !== null && partner.bid !== undefined ? partner.bid : null;
-  const needed = teamMin && partnerBid !== null ? Math.max(0, teamMin - partnerBid) : 0; // lowest bid that still lets the pair reach the team minimum
+  const needed = 0; // no per-player minimum: on team-min tables the team contract is raised to the board instead
   if (teamMin) grid.append(h('button', { class: 'bidbtn', type: 'button', text: '0', 'aria-label': 'Bid 0 (no books, not Nil)', disabled: needed > 0, onclick: () => send({ t: 'bid', bid: 0 }) }));
   else if (allowNil) grid.append(h('button', { class: 'bidbtn nil', type: 'button', text: 'Nil', 'aria-label': 'Bid Nil (zero)', disabled: needed > 0, onclick: () => send({ t: 'bid', bid: 0 }) }));
   for (let n = Math.max(minBid, 1); n <= maxBid; n++) grid.append(h('button', { class: 'bidbtn', type: 'button', text: String(n), disabled: n < needed, onclick: () => send({ t: 'bid', bid: n }) }));
-  const teamNote = teamMin ? (needed > 0 ? `Your team must bid at least ${teamMin} together, so bid ${needed} or more` : `Your team must bid at least ${teamMin} together. 0 means no books (no Nil at this table)`) : null;
+  const teamNote = teamMin ? `Bid anything 0–${maxBid}. Your team plays for at least ${teamMin} books (board ${teamMin}). 0 means no books (no Nil at this table)` : null;
   return h('div', { class: 'bidpanel' },
     h('div', { class: 'bid-title' }, h('b', { text: 'Your bid' }),
       h('span', { text: partnerBid !== null ? `Partner bid ${partnerBid === 0 && !teamMin ? 'Nil' : partnerBid}` : 'Partner has not bid yet' })),
@@ -1187,7 +1188,7 @@ function handSummary(t) {
   const sandbags = !t.rules || t.rules.sandbags;
   const rows = order.map((team) => {
     const r = L.teams[team];
-    return h('tr', {}, h('td', { text: teamLabel(team) }), h('td', { text: r.made === null ? '–' : String(r.bid) }), h('td', { text: String(r.tricks) }),
+    return h('tr', {}, h('td', { text: teamLabel(team) }), h('td', { text: r.made === null ? '–' : r.contract && r.contract > r.bid ? `${r.bid} (board ${r.contract})` : String(r.bid) }), h('td', { text: String(r.tricks) }),
       h('td', {}, fmt(r.delta)), h('td', { text: sandbags ? `${L.scores[team]} (bags ${L.bags[team]})` : String(L.scores[team]) }));
   });
   const notes = [];
