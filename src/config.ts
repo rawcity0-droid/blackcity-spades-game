@@ -48,6 +48,7 @@ export const CONFIG = {
   defaultTarget: 500,
   tableTargets: [250, 500],
   quickPlayTarget: 250,
+  friendCodeTtlMs: 15 * 60000, // free "Play with a friend": the invite code expires if nobody joins in this long
   freeMatchTarget: 500, // free "Play now" (random match) games play to this
   tournamentSizes: [4, 8, 16],
   eventTableOptions: [1, 2, 3, 4, 5, 6, 7, 8], // "Create Tournament": a multi-table event of one to eight tables

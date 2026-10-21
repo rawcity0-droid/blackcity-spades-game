@@ -60,6 +60,7 @@ export interface TableInit {
   practice?: boolean; // a solo table against bots: never listed, never joinable by anyone else
   jokers?: boolean; // Jokers mode (Premium-hosted): jokers deck, team min 4, no Nil, no bags
   teamMin?: number; // the partners' bids must add up to at least this (Premium-hosted tables); 0 or unset = regular spades
+  friend?: boolean; // free "Play with a friend": creator + one friend as partners, two computer players, free rules
   quick?: boolean; // made by Quick play (random match): only changes how the table is labelled
   timings: Timings;
   hooks: TableHooks;
@@ -87,6 +88,7 @@ export class Table {
   readonly creatorId: string | null;
   readonly practice: boolean;
   readonly quick: boolean;
+  readonly friend: boolean;
   startedAt = 0;
   teamMin: number;
   jokers: boolean;
@@ -129,6 +131,7 @@ export class Table {
     this.creatorId = init.hostId;
     this.practice = init.practice === true;
     this.quick = init.quick === true;
+    this.friend = init.friend === true;
     this.jokers = !!init.jokers && !init.quick && !init.practice;
     this.teamMin = this.jokers ? CONFIG.rules.premiumTeamMin : init.teamMin ?? 0;
     this.timings = init.timings;
@@ -263,6 +266,7 @@ export class Table {
   start(pid: string): Result {
     if (this.status !== 'waiting') return fail('wrong_state', 'Game already started');
     if (pid !== this.hostId) return fail('not_allowed', 'Only the host can start');
+    if (this.friend) return fail('not_allowed', 'This game starts when your friend joins');
     this.startGame();
     return { ok: true };
   }
@@ -271,6 +275,7 @@ export class Table {
   setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean; jokers?: boolean }): Result {
     if (this.status !== 'waiting') return fail('wrong_state', 'Rules can only be changed before the game starts');
     if (pid !== this.hostId) return fail('not_allowed', 'Only the host can change the rules');
+    if (this.friend) return fail('not_allowed', 'This game starts when your friend joins');
     if (patch.target !== undefined) {
       if (!(CONFIG.tableTargets as readonly number[]).includes(patch.target)) return fail('bad_message', 'Bad target score');
       this.target = patch.target;
@@ -292,6 +297,7 @@ export class Table {
   addBots(pid: string): Result {
     if (this.status !== 'waiting') return fail('wrong_state', 'Game already started');
     if (pid !== this.hostId) return fail('not_allowed', 'Only the host can fill seats');
+    if (this.friend) return fail('not_allowed', 'This game starts when your friend joins');
     this.seats.forEach((s, i) => { if (s.kind === 'empty') this.seatBot(i); });
     this.broadcast();
     this.hooks.changed();
@@ -619,6 +625,7 @@ export class Table {
       isPublic: this.isPublic,
       practice: this.practice,
       quick: this.quick,
+      friend: this.friend,
       bidRules: { minBid: CONFIG.rules.minBid, maxBid: CONFIG.rules.maxBid, allowNil: CONFIG.rules.allowNil, teamMin: this.teamMin, jokers: this.jokers },
       target: this.target,
       rules: { target: this.target, breakRule: this.breakRule, sandbags: this.jokers ? false : this.sandbags, jokers: this.jokers },

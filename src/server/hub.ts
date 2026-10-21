@@ -65,7 +65,7 @@ export const inviteMessage = (): string => 'Playing with others needs an invite 
 export const hostNotPremiumMessage = (): string => 'That game was not made by a Premium host, so free players cannot join it. Ask a Premium host for a code, or go Premium';
 
 const NAME_REQUIRED: ReadonlySet<string> = new Set([
-  'createTable', 'joinTable', 'watchTable', 'joinCode', 'watchCode', 'quickPlay',
+  'createTable', 'joinTable', 'watchTable', 'joinCode', 'watchCode', 'quickPlay', 'createFriend',
   'createTournament', 'joinTournament', 'watchTournament', 'createEvent',
 ]);
 
@@ -329,6 +329,7 @@ export class Hub {
       case 'joinCode': return this.joinCode(p, msg.code);
       case 'watchCode': return this.watchCode(p, msg.code);
       case 'quickPlay': return this.quickPlay(p);
+      case 'createFriend': return this.createFriend(p);
       case 'cancelMatch': return void this.cancelMatch(p);
       case 'startTable': return this.tableAction(p, (t) => t.start(p.id));
       case 'bid': return this.tableAction(p, (t) => t.bid(p.id, msg.bid));
@@ -392,11 +393,11 @@ export class Hub {
 
   // ---------- tables ----------
 
-  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; practice?: boolean; quick?: boolean; teamMin4?: boolean; jokers?: boolean; tournament?: { id: string; matchId: string; label: string } }): Table {
+  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; practice?: boolean; quick?: boolean; friend?: boolean; teamMin4?: boolean; jokers?: boolean; tournament?: { id: string; matchId: string; label: string } }): Table {
     const id = this.newId((x) => this.tables.has(x));
     const code = this.newCode();
     const table = new Table({
-      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, quick: opts.quick, teamMin: opts.quick || opts.practice || opts.teamMin4 === false ? 0 : CONFIG.rules.premiumTeamMin, jokers: opts.jokers === true, timings: this.timings,
+      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, quick: opts.quick, friend: opts.friend, teamMin: opts.quick || opts.practice || opts.teamMin4 === false ? 0 : CONFIG.rules.premiumTeamMin, jokers: opts.jokers === true, timings: this.timings,
       tournament: opts.tournament, rng: this.rng,
       hooks: {
         send: (pid, msg) => this.send(pid, msg),
@@ -427,6 +428,7 @@ export class Hub {
 
   private tableKind(t: Table): string {
     if (t.tournament) return this.events.has(t.tournament.id) ? 'event' : 'tournament';
+    if (t.friend) return 'friend';
     if (t.quick) return 'playnow';
     if (this.quickTables.has(t.id)) return 'quickplay';
     return 'hosted';
@@ -514,7 +516,42 @@ export class Hub {
     this.joinTable(p, this.tables.get(target.id), false);
   }
 
+  /** Free "Play with a friend": a private code; the one friend who joins sits across as partner and the game starts at once. */
+  private createFriend(p: Player): void {
+    const busy = this.busyReason(p);
+    if (busy) return this.err(p, 'busy', busy);
+    if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
+    this.leaveCurrent(p);
+    const table = this.makeTable({ isPublic: false, target: CONFIG.freeMatchTarget, hostId: p.id, quick: true, friend: true });
+    table.seatHuman(0, p.id, p.nick, true);
+    p.tableId = table.id;
+    table.broadcast();
+    const timer = setTimeout(() => {
+      if (this.tables.get(table.id) !== table || table.status !== 'waiting') return;
+      for (const pid of table.participants()) {
+        const q = this.players.get(pid);
+        if (q && q.tableId === table.id) { q.tableId = null; this.send(pid, { t: 'left', reason: 'Nobody joined with your code, so it expired' }); this.sendLobbyTo(q); }
+      }
+      table.destroy();
+    }, CONFIG.friendCodeTtlMs);
+    timer.unref?.();
+  }
+
+  private joinFriend(p: Player, t: Table): void {
+    if (t.status !== 'waiting' || t.seats[2].kind !== 'empty') return this.err(p, 'full', 'This game is full. Want a full table with friends? Host with Premium.');
+    if (p.tableId === t.id) return;
+    const busy = this.busyReason(p);
+    if (busy) return this.err(p, 'busy', busy);
+    this.leaveCurrent(p);
+    t.seatHuman(2, p.id, p.nick, true); // across from the creator: partners
+    p.tableId = t.id;
+    t.startGame(); // the two other seats get computer players
+    this.markLobbyDirty();
+  }
+
   private joinTable(p: Player, t: Table | undefined, byId: boolean): void {
+    if (t && t.friend && !byId) return this.joinFriend(p, t);
+    if (t && t.friend) return this.err(p, 'not_found', 'Table not found');
     if (byId && this.needsInvite(p)) return this.err(p, 'upgrade_required', inviteMessage()); // the lobby list is for watching; free players need a code
     if (!t || (byId && !t.isPublic)) return this.err(p, 'not_found', 'Table not found');
     if (t.practice) return this.err(p, 'not_allowed', 'That is a solo practice table');

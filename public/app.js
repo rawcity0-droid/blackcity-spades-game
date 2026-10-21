@@ -623,9 +623,11 @@ function openPlayModal() {
       ? h('div', { class: 'tiles' },
         h('button', { class: 'tile wide quick', type: 'button', onclick: () => { if (requireName(nameInput)) send({ t: 'quickPlay' }); } },
           h('b', { text: 'Play now: random players' }), h('span', { text: 'Enter your name and you are matched with random players.' })),
+        h('button', { class: 'tile wide friend', type: 'button', onclick: () => { if (requireName(nameInput)) { closeModal('play'); send({ t: 'createFriend' }); } } },
+          h('b', { text: 'Play with a friend' }), h('span', { text: 'Get a code for one friend. You play as partners against two other players.' })),
         tile('Watch a game', 'Any table or tournament, by code or from the list below.', () => openCodeModal('watch')),
         h('button', { class: 'tile wide', type: 'button', onclick: () => { if (requireName(nameInput)) openCodeModal('join'); } },
-          h('b', { text: 'Join with a code' }), h('span', { text: 'Got an invite from a Premium host? Enter the code to play with friends.' })),
+          h('b', { text: 'Join with a code' }), h('span', { text: 'Got a code from a friend or a Premium host? Enter it to play.' })),
         h('div', { class: 'tile upgrade' },
           h('b', { text: 'Host a table or tournament' }),
           h('span', { text: 'Premium hosts create tables, tournaments, and brackets, and choose who plays by inviting friends with a code.' }),
@@ -1172,7 +1174,7 @@ function renderAuto(t) {
   if (!t) { setAuto('', null); return; }
   if (t.phase === 'waiting') {
     const sig = ['lobby', t.id, t.code, JSON.stringify(t.rules), t.bidRules && t.bidRules.teamMin, t.isHost, t.hostSeat, t.mySeat, JSON.stringify(t.seats.map((s) => [s.kind, s.name]))].join('|');
-    setAuto(sig, () => hostLobby(t));
+    setAuto(sig, () => (t.friend ? friendLobby(t) : hostLobby(t)));
   } else if (t.phase === 'handOver' && t.lastHand && !(t.spectator && state.dismissed === t.handNo)) {
     const me = t.mySeat >= 0 ? t.seats[t.mySeat] : null;
     setAuto(['sum', t.id, t.handNo, me && me.ready].join('|'), () => handSummary(t));
@@ -1195,6 +1197,24 @@ function seatCard(t, i) {
   const label = `Team ${team + 1} · Position ${pos}${isMe ? ' · You' : ''}`;
   return h('div', { class: 'seatcard' + (filled ? '' : ' vacant') }, circle,
     h('div', { class: 'sc-text' }, h('b', { text: filled ? s.name : 'Open seat' }), h('span', { text: label })));
+}
+
+/** Free "Play with a friend": share the code and wait; the game starts as soon as the friend joins. */
+function friendLobby(t) {
+  const { el, body } = modalCard({ title: 'Play with a friend', id: 'lobby', cls: 'small', onClose: leaveTable });
+  const copy = () => { (navigator.clipboard ? navigator.clipboard.writeText(t.code) : Promise.reject()).then(() => toast('Code copied'), () => toast(t.code)); };
+  const share = () => {
+    const url = `${location.origin}/?code=${encodeURIComponent(t.code)}`;
+    if (navigator.share) navigator.share({ title: 'Blackcity Spades', text: `Play spades with me! Code ${t.code}`, url }).catch(() => {});
+    else copy();
+  };
+  body.append(
+    h('p', { class: 'lead', text: 'Send this code to one friend. They join with it from Play now › Join with a code, and sit across from you as your partner.' }),
+    h('div', { class: 'codebox' }, h('div', { class: 'cb-label', text: 'FRIEND CODE' }), h('div', { class: 'cb-code', 'aria-label': 'Friend code', text: t.code }), btn('soft small', 'Copy', copy)),
+    h('div', { class: 'btn-row' }, btn('gold', 'Share invite', share)),
+    h('p', { class: 'tiny center-text', text: 'Waiting for your friend… The game starts as soon as they join. The code expires after 15 minutes.' }),
+    h('div', { class: 'btn-row' }, btn('outline', 'Cancel', leaveTable)));
+  return el;
 }
 
 function hostLobby(t) {
