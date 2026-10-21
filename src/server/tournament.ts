@@ -64,11 +64,11 @@ export function roundName(size: number, round: number): string {
 export class Tournament {
   readonly id: string;
   readonly code: string;
-  readonly size: number;
+  size: number;
   readonly organizerId: string;
-  readonly teamMin4: boolean;
-  readonly jokers: boolean;
-  readonly isPublic: boolean;
+  teamMin4: boolean;
+  jokers: boolean;
+  isPublic: boolean;
   readonly createdAt = Date.now();
   state: TState = 'registering';
   finishedAt: number | null = null;
@@ -122,6 +122,30 @@ export class Tournament {
     this.entrants.push({ playerId: pid, name, key: this.nextKey++ });
     this.host.changed(this);
     return { ok: true };
+  }
+
+  /** Organizer, before the start: change the bracket size, bidding rule or public / private. Joined players are kept;
+   *  people in teams that no longer exist move into open teams. Refused if more people joined than the new size fits. */
+  edit(pid: string, patch: { size?: number; isPublic?: boolean; teamMin4?: boolean; jokers?: boolean }, newCodes: (n: number) => string[]): Result<{ removedCodes: string[]; addedCodes: string[] }> {
+    if (pid !== this.organizerId) return fail('not_allowed', 'Only the organizer can change the settings');
+    if (this.state !== 'registering') return fail('wrong_state', 'Settings can’t be changed after the start. You can end the tournament from the menu.');
+    let removedCodes: string[] = [];
+    let addedCodes: string[] = [];
+    if (patch.size !== undefined && patch.size !== this.size) {
+      if (!(CONFIG.tournamentSizes as readonly number[]).includes(patch.size)) return fail('bad_message', 'Bad bracket size');
+      const fits = patch.size * CONFIG.limits.maxEntrantsPerTournamentTeam;
+      if (this.entrants.length > fits) return fail('full', `${this.entrants.length} people have joined, but ${patch.size} teams fit only ${fits}. Ask some to leave or pick a bigger size.`);
+      addedCodes = newCodes(Math.max(0, patch.size - this.size));
+      removedCodes = this.pairing.resize(patch.size, addedCodes);
+      this.size = patch.size;
+    }
+    if (patch.isPublic !== undefined) this.isPublic = patch.isPublic;
+    if (patch.teamMin4 !== undefined || patch.jokers !== undefined) {
+      this.jokers = patch.jokers === true;
+      this.teamMin4 = this.jokers || patch.teamMin4 !== false;
+    }
+    this.host.changed(this);
+    return { ok: true, removedCodes, addedCodes };
   }
 
   /** Organizer only, before the start: swap two people, pair two people, or split a pair. */

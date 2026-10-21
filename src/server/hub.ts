@@ -147,7 +147,7 @@ export class Hub {
       }
     };
     // A Stripe-backed Premium that was last verified long ago is re-checked before it is used for a gated action.
-    const gated = msg.t === 'createTable' || msg.t === 'quickPlay' || msg.t === 'setRules' || msg.t === 'createTournament' || msg.t === 'createEvent';
+    const gated = msg.t === 'createTable' || msg.t === 'quickPlay' || msg.t === 'setRules' || msg.t === 'createTournament' || msg.t === 'createEvent' || msg.t === 'editTournament' || msg.t === 'editEvent';
     if (gated && this.isStale(p)) void this.recheck(p).then(run, run);
     else run();
   }
@@ -293,6 +293,19 @@ export class Hub {
     for (const [c, v] of this.codes) if (v.kind === kind && v.id === id) this.codes.delete(c);
   }
 
+  /** Organizer, before the start: change the settings; team codes follow the new team count (existing ones are kept). */
+  private editSettings(p: Player, kind: 'tournament' | 'event', patch: { size?: number; tables?: number; target?: number; isPublic?: boolean; teamMin4?: boolean; jokers?: boolean }): void {
+    const x = kind === 'tournament' ? (p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined) : (p.eventId ? this.events.get(p.eventId) : undefined);
+    if (!x) return this.err(p, 'not_found', 'You are not in a tournament');
+    if (p.id === x.organizerId && CONFIG.hostOnly.hostTournaments && !this.isSubscribed(p)) return this.err(p, 'upgrade_required', upgradeMessage());
+    const teamKind = kind === 'tournament' ? 'tournamentTeam' : 'eventTeam';
+    const newCodes = (n: number) => Array.from({ length: n }, () => { const c = this.newCode(); this.codes.set(c, { kind: teamKind, id: x.id }); return c; });
+    const r = x.edit(p.id, patch, newCodes);
+    if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
+    for (const c of r.removedCodes) this.codes.delete(c);
+    this.markLobbyDirty();
+  }
+
   /** Organizer: swap / pair / unpair people before the start. */
   private arrangeTeams(p: Player, action: 'swap' | 'pair' | 'unpair', a: number, b?: number): void {
     const x = (p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined) ?? (p.eventId ? this.events.get(p.eventId) : undefined);
@@ -343,6 +356,8 @@ export class Hub {
       case 'createEvent': return this.createEvent(p, msg.tables, msg.target ?? CONFIG.eventTarget, msg.teamMin4 !== false, msg.jokers === true);
       case 'startEvent': return this.startEvent(p);
       case 'leaveEvent': return this.leaveEvent(p);
+      case 'editTournament': return this.editSettings(p, 'tournament', msg);
+      case 'editEvent': return this.editSettings(p, 'event', msg);
       case 'arrangeTeams': return this.arrangeTeams(p, msg.action, msg.a, msg.b);
       case 'joinTable': return this.joinTable(p, this.tables.get(msg.id), true);
       case 'watchTable': return this.watchTable(p, this.tables.get(msg.id), true);

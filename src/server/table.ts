@@ -78,7 +78,7 @@ export interface ChatLine { from: string; role: 'player' | 'watcher'; text: stri
 export class Table {
   readonly id: string;
   readonly code: string;
-  readonly isPublic: boolean;
+  isPublic: boolean;
   target: number;
   breakRule: boolean;
   sandbags: boolean;
@@ -272,8 +272,8 @@ export class Table {
   }
 
   /** Host only, before the game starts: change target / break rule / sandbags. */
-  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean; jokers?: boolean }): Result {
-    if (this.status !== 'waiting') return fail('wrong_state', 'Rules can only be changed before the game starts');
+  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean; jokers?: boolean; isPublic?: boolean }): Result {
+    if (this.status !== 'waiting') return fail('wrong_state', 'Rules can’t be changed during a game. End the game from the menu to set up a new one.');
     if (pid !== this.hostId) return fail('not_allowed', 'Only the host can change the rules');
     if (this.friend) return fail('not_allowed', 'This game starts when your friend joins');
     if (patch.target !== undefined) {
@@ -281,6 +281,7 @@ export class Table {
       this.target = patch.target;
     }
     if (patch.breakRule !== undefined) this.breakRule = patch.breakRule;
+    if (patch.isPublic !== undefined && !this.quick && !this.practice) this.isPublic = patch.isPublic;
     if (patch.sandbags !== undefined) this.sandbags = patch.sandbags;
     // Bidding rule (Premium-hosted tables only; Play now / quick and practice tables always use regular bidding)
     if (patch.teamMin4 !== undefined && !this.quick && !this.practice) this.teamMin = patch.teamMin4 ? CONFIG.rules.premiumTeamMin : 0;

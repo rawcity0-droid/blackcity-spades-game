@@ -53,11 +53,11 @@ const SEAT_ORDER = [0, 2, 1, 3];
 export class TableEvent {
   readonly id: string;
   readonly code: string;
-  readonly tables: number;
-  readonly target: number;
+  tables: number;
+  target: number;
   readonly organizerId: string;
-  readonly teamMin4: boolean;
-  readonly jokers: boolean;
+  teamMin4: boolean;
+  jokers: boolean;
   readonly createdAt = Date.now();
   state: EState = 'registering';
   finishedAt: number | null = null;
@@ -101,6 +101,30 @@ export class TableEvent {
     this.entrants.push({ playerId: pid, name, key: this.nextKey++ });
     this.host.changed(this);
     return { ok: true };
+  }
+
+  /** Organizer, before the start: change the number of tables, target or bidding rule. Joined players are kept;
+   *  people in teams that no longer exist move into open teams. Refused if more people joined than the new tables seat. */
+  edit(pid: string, patch: { tables?: number; target?: number; teamMin4?: boolean; jokers?: boolean }, newCodes: (n: number) => string[]): Result<{ removedCodes: string[]; addedCodes: string[] }> {
+    if (pid !== this.organizerId) return fail('not_allowed', 'Only the organizer can change the settings');
+    if (this.state !== 'registering') return fail('wrong_state', 'Settings can’t be changed after the start. You can end the tournament from the menu.');
+    let removedCodes: string[] = [];
+    let addedCodes: string[] = [];
+    if (patch.target !== undefined && !(CONFIG.tableTargets as readonly number[]).includes(patch.target)) return fail('bad_message', 'Bad target score');
+    if (patch.tables !== undefined && patch.tables !== this.tables) {
+      if (!(CONFIG.eventTableOptions as readonly number[]).includes(patch.tables)) return fail('bad_message', 'Choose 1 to 8 tables');
+      if (this.entrants.length > patch.tables * 4) return fail('full', `${this.entrants.length} people have joined, but ${patch.tables} ${patch.tables === 1 ? 'table seats' : 'tables seat'} only ${patch.tables * 4}. Ask some to leave or pick more tables.`);
+      addedCodes = newCodes(Math.max(0, (patch.tables - this.tables) * 2));
+      removedCodes = this.pairing.resize(patch.tables * 2, addedCodes);
+      this.tables = patch.tables;
+    }
+    if (patch.target !== undefined) this.target = patch.target;
+    if (patch.teamMin4 !== undefined || patch.jokers !== undefined) {
+      this.jokers = patch.jokers === true;
+      this.teamMin4 = this.jokers || patch.teamMin4 !== false;
+    }
+    this.host.changed(this);
+    return { ok: true, removedCodes, addedCodes };
   }
 
   /** Organizer only, before the start: swap two people, pair two people, or split a pair. */

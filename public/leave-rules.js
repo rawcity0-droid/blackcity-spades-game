@@ -62,9 +62,14 @@ export function activeGame(s) {
   return null;
 }
 
-/** Back is offered to the host of a table and to the organizer of a tournament / event. */
+/** Back is offered to the host of a table and to the organizer of a tournament / event (also at its tables). */
 export function canGoBack(s, ui) {
-  if (ui === 'table') return !!s.table && s.table.isHost && s.table.mySeat >= 0 && !s.table.tournament;
+  if (ui === 'table') {
+    const t = s.table;
+    if (!t || t.mySeat < 0) return false;
+    // at a tournament / event table the organizer can step back to home (and Return to game) too
+    return t.tournament ? !!((s.tour && s.tour.isOrganizer) || (s.event && s.event.isOrganizer)) : t.isHost;
+  }
   if (ui === 'tournament') return active(s.tour) && s.tour.isOrganizer;
   if (ui === 'event') return active(s.event) && s.event.isOrganizer;
   return false;

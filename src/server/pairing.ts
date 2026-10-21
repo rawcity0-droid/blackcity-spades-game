@@ -14,6 +14,24 @@ export class Pairing {
 
   /** One code per team, Team 1 first. */
   setCodes(codes: string[]): void { this.slots = codes.map((code) => ({ code, members: [] })); }
+  get count(): number { return this.slots.length; }
+  codes(): string[] { return this.slots.map((s) => s.code); }
+
+  /** Change the number of teams, keeping the first teams and their codes. `extra` are codes for added teams.
+   *  People in removed teams move into the kept teams: a pair into an empty team, otherwise one by one into open spots.
+   *  The caller checks first that everyone fits. Returns the codes of the removed teams. */
+  resize(count: number, extra: string[]): string[] {
+    const removed = this.slots.slice(count);
+    this.slots = [...this.slots.slice(0, count), ...extra.slice(0, Math.max(0, count - this.slots.length)).map((code) => ({ code, members: [] as string[] }))];
+    for (const r of removed) {
+      if (!r.members.length) continue;
+      const empty = this.slots.find((x) => x.members.length === 0);
+      if (empty) { empty.members = r.members; continue; }
+      for (const pid of r.members) this.slots.find((x) => x.members.length < 2)?.members.push(pid);
+    }
+    return removed.map((r) => r.code);
+  }
+
   hasCode(code: string): boolean { return this.slots.some((s) => s.code === code); }
   private slotOf(pid: string) { return this.slots.find((s) => s.members.includes(pid)); }
   partnerOf(pid: string): string | undefined { return this.slotOf(pid)?.members.find((m) => m !== pid); }

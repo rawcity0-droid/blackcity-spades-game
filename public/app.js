@@ -709,12 +709,14 @@ function openCodeModal(kind, prefill = '') {
   setTimeout(() => input.focus(), 60);
 }
 
-function openEventModal() {
+/** Create a multi-table event, or (edit = the event view) change its settings before the start. */
+function openEventModal(edit) {
   closeModal('play');
   const cfg = state.config || {};
   const opts = cfg.eventTableOptions || [1, 2, 3, 4, 5, 6, 7, 8];
-  const f = { tables: 2, target: cfg.eventTarget || 250, teamMin4: true, jokers: false };
-  const { el, body } = modalCard({ title: 'Create Tournament', id: 'event', cls: 'small' });
+  const f = edit ? { tables: edit.tables, target: edit.target, teamMin4: !!edit.teamMin, jokers: !!edit.jokers }
+    : { tables: 2, target: cfg.eventTarget || 250, teamMin4: true, jokers: false };
+  const { el, body } = modalCard({ title: edit ? 'Edit settings' : 'Create Tournament', id: 'event', cls: 'small' });
   body.append(
     h('p', { class: 'lead', text: 'Run one to eight tables. Players join with your code and are seated four to a table; open seats are filled automatically. Each table plays one game.' }),
     h('div', { class: 'field-label', text: 'Number of tables' }),
@@ -723,7 +725,8 @@ function openEventModal() {
     seg((cfg.tableTargets || [250, 500]).map((n) => [n, String(n)]), f.target, (v) => { f.target = v; }),
     ...bidRuleField(f),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('event')),
-      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers }); })));
+      edit ? btn('gold', 'Save', () => { send({ t: 'editEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers }); closeModal('event'); })
+        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers }); })));
   openModal('event', el);
 }
 
@@ -739,18 +742,23 @@ const bidRuleLabel = (teamMin, jokers) => (jokers ? 'Jokers' : teamMin ? `Team m
 /** Lobby chip cycle: Team min 4 → Regular bidding → Jokers → Team min 4. */
 const nextBidRule = (br) => (br && br.jokers ? { teamMin4: true, jokers: false } : br && br.teamMin ? { teamMin4: false, jokers: false } : { teamMin4: true, jokers: true });
 
-function openBracketModal() {
+/** Create a bracket, or (edit = the bracket view) change its settings before the start. */
+function openBracketModal(edit) {
   closeModal('play');
   const cfg = state.config || {};
-  const f = { size: (cfg.tournamentSizes || [4, 8, 16])[0], teamMin4: true, jokers: false };
-  const { el, body } = modalCard({ title: 'Create Bracket', id: 'bracket', cls: 'small' });
+  const f = edit ? { size: edit.size, teamMin4: !!edit.teamMin, jokers: !!edit.jokers, isPublic: !!edit.isPublic }
+    : { size: (cfg.tournamentSizes || [4, 8, 16])[0], teamMin4: true, jokers: false, isPublic: false };
+  const { el, body } = modalCard({ title: edit ? 'Edit settings' : 'Create Bracket', id: 'bracket', cls: 'small' });
   body.append(
     h('p', { class: 'lead', text: `A winner-advances bracket. Every round is best of 3 (games to ${cfg.tournamentTargetEarly}); the final is best of 5 (games to ${cfg.tournamentTargetFinal}). Solo players are paired up and open spots are filled automatically.` }),
     h('div', { class: 'field-label', text: 'Teams' }),
     seg((cfg.tournamentSizes || [4, 8, 16]).map((n) => [n, String(n)]), f.size, (v) => { f.size = v; }),
     ...bidRuleField(f),
+    h('div', { class: 'field-label', text: 'Who can find it' }),
+    seg([[false, 'Private (code only)'], [true, 'Public (listed)']], f.isPublic, (v) => { f.isPublic = v; }),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('bracket')),
-      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: false, teamMin4: f.teamMin4, jokers: f.jokers }); })));
+      edit ? btn('gold', 'Save', () => { send({ t: 'editTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers }); closeModal('bracket'); })
+        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers }); })));
   openModal('bracket', el);
 }
 
@@ -871,6 +879,20 @@ function goBack() {
   homeSig = '';
   closeAllModals();
   render();
+}
+
+/** Browser / phone Back button: closes an open window first, then acts like the in-app Back, and never leaves the
+ *  app while the player is in a game (one history entry is kept so the next Back lands here again). */
+function setupBrowserBack() {
+  history.pushState({ spades: 1 }, '');
+  window.addEventListener('popstate', () => {
+    const inGame = !!activeGame(state);
+    const top = [...modals.keys()].pop();
+    if (top) { if (top === 'matching') cancelMatch(); else closeModal(top); }
+    else if (state.ui !== 'home' && canGoBack(state, state.ui)) goBack();
+    else if (state.ui !== 'home' && !inGame) { state.ui = 'home'; render(); }
+    if (inGame || state.ui !== 'home') history.pushState({ spades: 1 }, '');
+  });
 }
 
 /** Return to game: straight back to the same table / bracket / event view with its current state. */
@@ -1263,7 +1285,8 @@ function hostLobby(t) {
       chip(`Break rule ${r.breakRule ? 'on' : 'off'}`, () => send({ t: 'setRules', breakRule: !r.breakRule })),
       r.jokers ? h('span', { class: 'rchip', text: 'No sandbags' }) : chip(`Sandbags ${r.sandbags ? 'on' : 'off'}`, () => send({ t: 'setRules', sandbags: !r.sandbags })),
       ...(t.quick || t.practice ? [] : [chip(bidRuleLabel(t.bidRules && t.bidRules.teamMin, t.bidRules && t.bidRules.jokers), () => send({ t: 'setRules', ...nextBidRule(t.bidRules) }))]),
-      h('span', { class: 'rchip', text: t.quick ? 'Quick play' : t.practice ? 'Practice table' : t.isPublic ? 'Public table' : 'Private · Premium host' })),
+      t.quick || t.practice ? h('span', { class: 'rchip', text: t.quick ? 'Quick play' : 'Practice table' })
+        : chip(t.isPublic ? 'Public table' : 'Private · Premium host', () => send({ t: 'setRules', isPublic: !t.isPublic }))),
     h('div', { class: 'tiny center-text', text: host ? 'Host controls · tap a rule to change it' : 'Host controls · only the host can change the rules' }),
     h('div', { class: 'seatgrid' }, seatOrder.map((i) => seatCard(t, i))),
     h('div', { class: 'teambox' },
@@ -1412,6 +1435,7 @@ function renderBracketSheet() {
       h('h3', { text: `Players ${T.entrants.length}/${T.capacity}` }),
       ...teamsPanel(T),
       h('p', { class: 'muted', text: 'A player without a partner gets one at the start, and empty teams are filled automatically.' }),
+      T.isOrganizer ? btn('outline wide', 'Edit settings', () => openBracketModal(T)) : null,
       T.isOrganizer ? btn('gold wide', 'Start tournament', () => send({ t: 'startTournament' })) : h('p', { text: 'Waiting for the organizer to start…' })));
   } else {
     const br = h('div', { class: 'bracket' });
@@ -1473,6 +1497,7 @@ function renderEventSheet() {
       h('h3', { text: `Players ${E.entrants.length}/${E.capacity}` }),
       ...teamsPanel(E),
       h('p', { class: 'muted', text: 'When the organizer starts, the teams sit two to a table, partners across from each other. Open seats are filled automatically, and only the tables needed are opened.' }),
+      E.isOrganizer ? btn('outline wide', 'Edit settings', () => openEventModal(E)) : null,
       E.isOrganizer ? btn('gold wide', 'Start tournament', () => send({ t: 'startEvent' })) : h('p', { text: 'Waiting for the organizer to start…' })));
   } else {
     if (E.state === 'finished') {
@@ -1669,6 +1694,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => { naviga
 
 // ---------- boot ----------
 render();
+setupBrowserBack();
 connect();
 if (shouldShowCover({ forced: params.get('cover') === '1', seen: !!session.get(KEY_COVER), deepLink: !!(urlCode || urlPremium) })) {
   session.set(KEY_COVER, '1');

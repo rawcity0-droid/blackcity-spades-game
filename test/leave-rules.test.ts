@@ -68,6 +68,7 @@ test('Back is offered to the table host and the tournament / event organizer onl
   assert.equal(canGoBack({ table: { ...host, isHost: false } }, 'table'), false);
   assert.equal(canGoBack({ table: { ...host, mySeat: -1 } }, 'table'), false, 'watchers keep their current behaviour');
   assert.equal(canGoBack({ table: { ...host, tournament: { label: 'x' } } }, 'table'), false);
+  assert.equal(canGoBack({ table: { ...host, isHost: false, tournament: { label: 'x' } }, tour: { isOrganizer: true } }, 'table'), true, 'the organizer can step back from a bracket table');
   const org = { joined: true, isOrganizer: true, state: 'running' };
   assert.equal(canGoBack({ tour: org }, 'tournament'), true);
   assert.equal(canGoBack({ event: org }, 'event'), true);
