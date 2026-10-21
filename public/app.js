@@ -842,6 +842,7 @@ function openMenu() {
   if (state.table) items.push(['Leave table', () => { closeModal('menu'); leaveTable(); }]);
   if (tournamentKind()) items.push(['Leave tournament', () => { closeModal('menu'); leaveTournament(); }]);
   if (!state.subscribed) items.push(['Restore Premium', () => { closeModal('menu'); openRestore(); }]);
+  if (canOfferInstall()) items.push(['Install app', () => { closeModal('menu'); installApp(); }]);
   items.push(['Card gallery', () => { location.href = '/cards.html'; }]);
   if (state.config && state.config.devUnlock) items.push(['Dev: toggle Premium', () => { closeModal('menu'); send({ t: 'devToggleSubscription' }); }]);
   const pop = h('div', { class: 'menu-pop', role: 'menu' },
@@ -1568,6 +1569,21 @@ function showCover() {
   document.body.append(coverEl);
   play.focus();
 }
+
+// ---------- install (PWA) ----------
+let installPrompt = null; // Android/Chrome: the deferred beforeinstallprompt event
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; });
+window.addEventListener('appinstalled', () => { installPrompt = null; });
+const isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function canOfferInstall() { return !isStandalone() && (!!installPrompt || isIOS()); }
+function installApp() {
+  if (installPrompt) { const p = installPrompt; installPrompt = null; p.prompt(); return; }
+  const { el, body } = modalCard({ title: 'Install app', id: 'install', cls: 'small' });
+  body.append(h('p', { text: 'In Safari, tap the Share button, then “Add to Home Screen”.' }));
+  openModal('install', el);
+}
+if ('serviceWorker' in navigator) window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
 
 // ---------- boot ----------
 render();
