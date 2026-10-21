@@ -147,7 +147,7 @@ export class Hub {
       }
     };
     // A Stripe-backed Premium that was last verified long ago is re-checked before it is used for a gated action.
-    const gated = (msg.t === 'createTable' && !msg.isPublic) || msg.t === 'createTournament' || msg.t === 'createEvent';
+    const gated = msg.t === 'createTable' || msg.t === 'quickPlay' || msg.t === 'setRules' || msg.t === 'createTournament' || msg.t === 'createEvent';
     if (gated && this.isStale(p)) void this.recheck(p).then(run, run);
     else run();
   }
@@ -284,25 +284,25 @@ export class Hub {
     }
   }
 
-  private removeTournament(id: string): void {
+  private removeTournament(id: string, why?: string): void {
     const t = this.tournaments.get(id);
     if (!t) return;
     this.tournaments.delete(id);
     this.codes.delete(t.code);
     for (const pid of t.audience()) {
       const p = this.players.get(pid);
-      if (p && p.tournamentId === id) { p.tournamentId = null; this.send(pid, { t: 'tournamentLeft', reason: t.state === 'cancelled' ? 'The organizer cancelled the tournament' : '' }); }
+      if (p && p.tournamentId === id) { p.tournamentId = null; this.send(pid, { t: 'tournamentLeft', reason: why ?? (t.state === 'cancelled' ? 'The organizer cancelled the tournament' : '') }); }
     }
   }
 
-  private removeEvent(id: string): void {
+  private removeEvent(id: string, why?: string): void {
     const e = this.events.get(id);
     if (!e) return;
     this.events.delete(id);
     this.codes.delete(e.code);
     for (const pid of e.audience()) {
       const p = this.players.get(pid);
-      if (p && p.eventId === id) { p.eventId = null; this.send(pid, { t: 'eventLeft', reason: e.state === 'cancelled' ? 'The organizer cancelled the tournament' : '' }); }
+      if (p && p.eventId === id) { p.eventId = null; this.send(pid, { t: 'eventLeft', reason: why ?? (e.state === 'cancelled' ? 'The organizer cancelled the tournament' : '') }); }
     }
   }
 
@@ -337,6 +337,7 @@ export class Hub {
       case 'ready': return this.tableAction(p, (t) => t.ready(p.id));
       case 'rematch': return this.tableAction(p, (t) => t.rematch(p.id));
       case 'leaveTable': return this.leaveTable(p);
+      case 'endGame': return this.endGame(p);
       case 'createTournament': return this.createTournament(p, msg.size, msg.isPublic, msg.teamMin4 !== false, msg.jokers === true);
       case 'joinTournament': return this.joinTournament(p, this.tournaments.get(msg.id), true);
       case 'watchTournament': return this.watchTournament(p, this.tournaments.get(msg.id));
@@ -496,6 +497,7 @@ export class Hub {
       if (!isPublic && CONFIG.hostOnly.privateTables && !this.isSubscribed(p)) return this.err(p, 'upgrade_required', upgradeMessage());
       if (this.needsInvite(p)) return this.err(p, 'upgrade_required', inviteMessage());
     }
+    if (practice && jokers && !this.isSubscribed(p)) return this.err(p, 'upgrade_required', upgradeMessage()); // Jokers is a Premium mode, practice too
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
     if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
@@ -690,6 +692,48 @@ export class Hub {
     } else return;
     this.send(p.id, { t: 'left', reason: '' });
     this.sendLobbyTo(p);
+    this.markLobbyDirty();
+  }
+
+  /**
+   * Host "End game": ends the whole thing for everyone at any moment and sends every person home.
+   * Organizer of a tournament / event: the whole bracket or event and all its tables. Host of a table: that table.
+   * A random "Play now" table with other people on it has no real host, so there it is the same as Leave.
+   */
+  private endGame(p: Player): void {
+    const reason = 'The host ended the game';
+    const tour = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
+    const ev = p.eventId ? this.events.get(p.eventId) : undefined;
+    const org = tour && tour.organizerId === p.id ? tour : ev && ev.organizerId === p.id ? ev : undefined;
+    if (org) {
+      for (const t of [...this.tables.values()]) if (t.tournament?.id === org.id) this.closeTable(t, reason);
+      if (org.state !== 'finished') org.state = 'cancelled';
+      if (org === tour) this.removeTournament(org.id, reason); else this.removeEvent(org.id, reason);
+      for (const vid of org.viewers) {
+        const v = this.players.get(vid);
+        if (v && v.tournamentId !== org.id && v.eventId !== org.id) this.send(vid, { t: org === tour ? 'tournamentLeft' : 'eventLeft', reason });
+      }
+      org.viewers.clear();
+      this.markLobbyDirty();
+      return;
+    }
+    const t = p.tableId ? this.tables.get(p.tableId) : undefined;
+    if (!t || t.tournament || t.hostId !== p.id) {
+      if (t || p.tournamentId || p.eventId) return this.err(p, 'not_allowed', 'Only the host can end the game for everyone. You can still leave');
+      return this.leaveTable(p);
+    }
+    if (t.quick && !t.friend && t.humanCount() > 1) return this.leaveTable(p);
+    this.closeTable(t, reason);
+  }
+
+  /** Close a table now: timers stop, everyone seated or watching is sent home with the reason. */
+  private closeTable(t: Table, reason: string): void {
+    const people = [...new Set([...t.participants(), ...t.watchers, ...t.waiters])];
+    t.dispose();
+    this.tables.delete(t.id);
+    this.quickTables.delete(t.id);
+    this.codes.delete(t.code);
+    for (const pid of people) this.releasePlayer(pid, t, reason);
     this.markLobbyDirty();
   }
 

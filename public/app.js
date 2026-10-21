@@ -841,6 +841,7 @@ function openMenu() {
   if (inGame && state.ui === 'home') items.push(['Return to game', () => { closeModal('menu'); returnToGame(); }]);
   items.push(['Play Online', openPlayModal], ['Rules', openRules]);
   if (state.tour || state.event) items.push([state.event ? 'Tournament view' : 'Bracket view', () => { closeModal('menu'); state.away = false; state.ui = state.event ? 'event' : 'tournament'; render(); }]);
+  if (canEndGame()) items.push(['End game', () => { closeModal('menu'); endGame(); }]);
   if (state.table) items.push(['Leave table', () => { closeModal('menu'); leaveTable(); }]);
   if (tournamentKind()) items.push(['Leave tournament', () => { closeModal('menu'); leaveTournament(); }]);
   if (!state.subscribed) items.push(['Restore Premium', () => { closeModal('menu'); openRestore(); }]);
@@ -908,6 +909,27 @@ function leaveTournament() {
   const ask = sheetLeaveConfirm(x);
   const go = () => send({ t: kind === 'event' ? 'leaveEvent' : 'leaveTournament' });
   if (ask) askConfirm(ask, 'Leave', go); else go();
+}
+
+/** Host / organizer: may end the game for everyone (a random Play now table with other people has no host who can). */
+function canEndGame() {
+  const live = (x) => x && x.state !== 'finished' && x.state !== 'cancelled';
+  if (state.tour && state.tour.isOrganizer && live(state.tour)) return true;
+  if (state.event && state.event.isOrganizer && live(state.event)) return true;
+  const t = state.table;
+  if (!t || t.tournament || !t.isHost) return false;
+  return !(t.quick && !t.friend && t.seats.filter((s) => s.kind === 'human').length > 1);
+}
+
+/** End game for everyone, any time (with a confirm). The server sends everyone home. */
+function endGame() {
+  const big = (state.tour && state.tour.isOrganizer) || (state.event && state.event.isOrganizer);
+  const msg = big ? 'End the whole tournament for everyone? All of its tables stop now and everyone goes back home.'
+    : 'End this game for everyone at the table? Everyone goes back home.';
+  askConfirm(msg, 'End game', () => {
+    if (!send({ t: 'endGame' })) { toast('You are offline. Reconnecting… try again in a moment.'); return; }
+    state.away = false;
+  });
 }
 
 function leaveTable() {
