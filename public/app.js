@@ -711,17 +711,17 @@ function openEventModal() {
   closeModal('play');
   const cfg = state.config || {};
   const opts = cfg.eventTableOptions || [1, 2, 3, 4, 5, 6, 7, 8];
-  const f = { tables: 2, target: cfg.eventTarget || 250, teamMin4: true };
+  const f = { tables: 2, target: cfg.eventTarget || 250, teamMin4: true, jokers: false };
   const { el, body } = modalCard({ title: 'Create Tournament', id: 'event', cls: 'small' });
   body.append(
-    h('p', { class: 'lead', text: 'Run one to eight tables. Players join with your code and are seated four to a table; bots fill empty seats. Each table plays one game.' }),
+    h('p', { class: 'lead', text: 'Run one to eight tables. Players join with your code and are seated four to a table; open seats are filled automatically. Each table plays one game.' }),
     h('div', { class: 'field-label', text: 'Number of tables' }),
     seg(opts.map((n) => [n, String(n)]), f.tables, (v) => { f.tables = v; }),
     h('div', { class: 'field-label', text: 'Each game goes to' }),
     seg((cfg.tableTargets || [250, 500]).map((n) => [n, String(n)]), f.target, (v) => { f.target = v; }),
     ...bidRuleField(f),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('event')),
-      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4 }); })));
+      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers }); })));
   openModal('event', el);
 }
 
@@ -729,23 +729,26 @@ function openEventModal() {
 function bidRuleField(f) {
   return [
     h('div', { class: 'field-label', text: 'Bidding' }),
-    seg([[true, 'Team min 4'], [false, 'Regular bidding']], f.teamMin4, (v) => { f.teamMin4 = v; }),
+    seg([['min4', 'Team min 4'], ['regular', 'Regular bidding'], ['jokers', 'Jokers']], f.jokers ? 'jokers' : f.teamMin4 ? 'min4' : 'regular',
+      (v) => { f.teamMin4 = v !== 'regular'; f.jokers = v === 'jokers'; }),
   ];
 }
-const bidRuleLabel = (teamMin) => (teamMin ? `Team min ${teamMin}` : 'Regular bidding');
+const bidRuleLabel = (teamMin, jokers) => (jokers ? 'Jokers' : teamMin ? `Team min ${teamMin}` : 'Regular bidding');
+/** Lobby chip cycle: Team min 4 → Regular bidding → Jokers → Team min 4. */
+const nextBidRule = (br) => (br && br.jokers ? { teamMin4: true, jokers: false } : br && br.teamMin ? { teamMin4: false, jokers: false } : { teamMin4: true, jokers: true });
 
 function openBracketModal() {
   closeModal('play');
   const cfg = state.config || {};
-  const f = { size: (cfg.tournamentSizes || [4, 8, 16])[0], teamMin4: true };
+  const f = { size: (cfg.tournamentSizes || [4, 8, 16])[0], teamMin4: true, jokers: false };
   const { el, body } = modalCard({ title: 'Create Bracket', id: 'bracket', cls: 'small' });
   body.append(
-    h('p', { class: 'lead', text: `A winner-advances bracket. Every round is best of 3 (games to ${cfg.tournamentTargetEarly}); the final is best of 5 (games to ${cfg.tournamentTargetFinal}). Solo players are paired up and bots fill empty teams.` }),
+    h('p', { class: 'lead', text: `A winner-advances bracket. Every round is best of 3 (games to ${cfg.tournamentTargetEarly}); the final is best of 5 (games to ${cfg.tournamentTargetFinal}). Solo players are paired up and open spots are filled automatically.` }),
     h('div', { class: 'field-label', text: 'Teams' }),
     seg((cfg.tournamentSizes || [4, 8, 16]).map((n) => [n, String(n)]), f.size, (v) => { f.size = v; }),
     ...bidRuleField(f),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('bracket')),
-      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: false, teamMin4: f.teamMin4 }); })));
+      btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: false, teamMin4: f.teamMin4, jokers: f.jokers }); })));
   openModal('bracket', el);
 }
 
@@ -812,12 +815,18 @@ function openRules() {
       'Making your team bid scores 10 points per bid trick. Falling short loses 10 points per bid trick.',
       `Each trick over the bid is a bag: +1 point each. With sandbags on, collecting ${r.bagLimit} bags costs ${r.bagPenalty} points and takes ${r.bagLimit} off your bag count. The host can turn sandbags off: then bags are not counted and there is no penalty.`,
       ...(bid.allowNil ? [`Nil (regular bidding tables): a player who bids Nil and takes no tricks scores +${r.nilBonus}. If they take any trick it is −${r.nilBonus}. A Nil bidder’s tricks never count toward their partner’s bid; if the Nil fails those tricks become bags.`] : [])),
+    sec('Jokers mode (Premium hosts)',
+      'The 2 of Diamonds and the 2 of Hearts come out of the deck and a Big Joker and a Little Joker go in. Still 52 cards, 13 each.',
+      'Both jokers are spades: they follow spades, they break spades, and you can’t lead them before spades are broken (unless you only hold spades).',
+      'Trump order from high to low: Big Joker, Little Joker, 2 of Spades, Ace of Spades, King of Spades … down to the 3 of Spades. Diamonds and hearts run Ace down to 3.',
+      'Bidding is like Team min 4: no Nil, a 0 is a plain zero, any player can bid 0 to 13, and each team plays for at least 4 books.',
+      'No sandbagging: tricks over the contract score nothing extra and there is no bag penalty. Making the contract scores 10 per book; falling short is a set of −10 per book, so a team that takes fewer than 4 books is always set.'),
     sec('Winning',
       `The first team to reach ${targets} points (set by the table) wins. A team that falls to ${r.loseScore} or lower loses at once.`,
       'If both teams reach the target in the same hand, the higher score wins. If the scores are exactly equal, play continues with more hands until one team is ahead.'),
     sec('Tournaments',
       `Bracket: single elimination, random seeding. Every match is a series at the same table: best of 3 (first to 2 wins, games to ${cfg.tournamentTargetEarly}), and the final is best of 5 (first to 3 wins, games to ${cfg.tournamentTargetFinal}). A team whose players all leave forfeits.`,
-      'Tournament (one to eight tables): everyone joins with the host’s code and is seated four to a table; bots fill empty seats. Each table plays one game and the winners are listed.',
+      'Tournament (one to eight tables): everyone joins with the host’s code and is seated four to a table; open seats are filled automatically. Each table plays one game and the winners are listed.',
       'Watching is always free. Free players can also tap Play now: you are matched with random players and seated at a table, but you cannot choose who you play with. To play with friends you join a Premium host’s game with their code. Premium hosts create tables, tournaments, and brackets and choose who plays.'));
   openModal('rules', el);
 }
@@ -958,7 +967,7 @@ function renderTop(t) {
       stats ? h('div', { class: 'sbox-stats', text: stats }) : null);
   }));
   const mineTeam = t && t.mySeat >= 0 ? t.mySeat % 2 : 0;
-  const label = t ? (t.tournament ? t.tournament.label + (t.series ? ` · ${t.series.wins[mineTeam]}–${t.series.wins[1 - mineTeam]}` : '') : `First to ${t.target}`) : 'First to 500';
+  const label = t ? (t.tournament ? t.tournament.label + (t.series ? ` · ${t.series.wins[mineTeam]}–${t.series.wins[1 - mineTeam]}` : '') : `First to ${t.target}`) + (t.bidRules && t.bidRules.jokers ? ' · Jokers' : '') : 'First to 500';
   $('target-label').textContent = label;
   const acts = $('top-actions');
   if (!acts.firstChild) {
@@ -973,14 +982,14 @@ function seatStatus(t, i) {
   if (!t) return { text: 'Waiting to bid' };
   const s = t.seats[i];
   if (s.kind === 'empty') return { text: 'Open seat' };
-  if (s.kind === 'human' && !s.connected) return { text: 'Away · bot plays' };
-  if (t.phase === 'waiting') return { text: s.kind === 'bot' ? 'Bot' : i === t.hostSeat ? 'Host' : 'Joined' };
+  if (s.kind === 'human' && !s.connected) return { text: 'Away · auto-play' };
+  if (t.phase === 'waiting') return { text: s.kind === 'bot' ? 'Ready' : i === t.hostSeat ? 'Host' : 'Joined' };
   const hasBid = s.bid !== null && s.bid !== undefined;
   const parts = [];
   if (hasBid) parts.push(['bid', bidLabel(s.bid, t)]);
   else if (t.phase === 'bidding') parts.push(['', t.turn === i ? 'Bidding…' : 'Waiting to bid']);
   if (hasBid && t.phase !== 'bidding') parts.push(['won', `won ${s.tricks}`]);
-  if (s.botControlled && t.phase !== 'finished') parts.push(['', 'bot']);
+  if (s.botControlled && t.phase !== 'finished') parts.push(['', 'auto-play']);
   return { parts };
 }
 
@@ -1043,7 +1052,7 @@ function renderStatus(t) {
   const myTurn = t.legal && t.legal.length > 0;
   let text = '';
   if (t.queued) text = 'You are queued. You will be seated at the next hand.';
-  else if (t.botControlled) text = 'A bot is playing your seat until the next hand.';
+  else if (t.botControlled) text = 'Your seat is on auto-play until the next hand.';
   else if (t.phase === 'waiting') text = '';
   else if (t.canBid) text = '';
   else if (myTurn) text = 'Your turn: tap a card';
@@ -1182,7 +1191,7 @@ function seatCard(t, i) {
   if (isMe && state.avatar) circle.append(h('img', { src: state.avatar, alt: '' }));
   else if (filled && facePhoto(s.face)) circle.append(facePhoto(s.face));
   else circle.textContent = initials;
-  const label = `Team ${team + 1} · Position ${pos}${isMe ? ' · You' : s.kind === 'bot' ? ' · Bot' : ''}`;
+  const label = `Team ${team + 1} · Position ${pos}${isMe ? ' · You' : ''}`;
   return h('div', { class: 'seatcard' + (filled ? '' : ' vacant') }, circle,
     h('div', { class: 'sc-text' }, h('b', { text: filled ? s.name : 'Open seat' }), h('span', { text: label })));
 }
@@ -1209,9 +1218,9 @@ function hostLobby(t) {
     h('div', { class: 'rchips' },
       chip(`First to ${r.target}`, () => send({ t: 'setRules', target: other })),
       chip(`Break rule ${r.breakRule ? 'on' : 'off'}`, () => send({ t: 'setRules', breakRule: !r.breakRule })),
-      chip(`Sandbags ${r.sandbags ? 'on' : 'off'}`, () => send({ t: 'setRules', sandbags: !r.sandbags })),
-      ...(t.quick || t.practice ? [] : [chip(bidRuleLabel(t.bidRules && t.bidRules.teamMin), () => send({ t: 'setRules', teamMin4: !(t.bidRules && t.bidRules.teamMin) }))]),
-      h('span', { class: 'rchip', text: t.quick ? 'Quick play' : t.practice ? 'Practice vs bots' : t.isPublic ? 'Public table' : 'Private · Premium host' })),
+      r.jokers ? h('span', { class: 'rchip', text: 'No sandbags' }) : chip(`Sandbags ${r.sandbags ? 'on' : 'off'}`, () => send({ t: 'setRules', sandbags: !r.sandbags })),
+      ...(t.quick || t.practice ? [] : [chip(bidRuleLabel(t.bidRules && t.bidRules.teamMin, t.bidRules && t.bidRules.jokers), () => send({ t: 'setRules', ...nextBidRule(t.bidRules) }))]),
+      h('span', { class: 'rchip', text: t.quick ? 'Quick play' : t.practice ? 'Practice table' : t.isPublic ? 'Public table' : 'Private · Premium host' })),
     h('div', { class: 'tiny center-text', text: host ? 'Host controls · tap a rule to change it' : 'Host controls · only the host can change the rules' }),
     h('div', { class: 'seatgrid' }, seatOrder.map((i) => seatCard(t, i))),
     h('div', { class: 'teambox' },
@@ -1219,11 +1228,11 @@ function hostLobby(t) {
       h('div', { text: `Team 2: ${nameOf(1)} + ${nameOf(3)}` })),
     host
       ? h('div', { class: 'btn-row three' },
-        btn('soft', 'Add Bots', () => send({ t: 'addBots' }), { disabled: !anyEmpty }),
+        btn('soft', 'Fill seats', () => send({ t: 'addBots' }), { disabled: !anyEmpty }),
         btn('soft', 'Swap partners', () => send({ t: 'swapPartners' })),
         btn('gold', 'Start', () => send({ t: 'startTable' }), { disabled: !allFilled }))
       : h('div', { class: 'tiny center-text', text: 'Waiting for the host to start…' }),
-    host ? h('div', { class: 'tiny center-text', text: 'Add bots or invite players to fill all 4 seats, then start.' }) : null,
+    host ? h('div', { class: 'tiny center-text', text: 'Fill the open seats or invite players until all 4 are taken, then start.' }) : null,
     host ? h('div', { class: 'btn-row' }, btn('outline', '‹ Back', goBack)) : null);
   return el;
 }
@@ -1310,7 +1319,7 @@ function renderBracketSheet() {
   if (!T) return;
   const sh = sheetShell(`Bracket · ${T.size} teams`, T.state, stateBadge(T.state));
   sh.append(codeBox(T.code, 'TOURNAMENT CODE'),
-    h('div', { class: 'muted', text: `Free to join · matches to ${T.rounds.length ? T.rounds[0].target : state.config.tournamentTargetEarly}, final to ${state.config.tournamentTargetFinal} · ${bidRuleLabel(T.teamMin)}` }));
+    h('div', { class: 'muted', text: `Free to join · matches to ${T.rounds.length ? T.rounds[0].target : state.config.tournamentTargetEarly}, final to ${state.config.tournamentTargetFinal} · ${bidRuleLabel(T.teamMin, T.jokers)}` }));
   if (T.champion) {
     sh.append(h('div', { class: 'champ' }, h('div', { class: 'muted', text: 'Champion' }), h('h3', { text: `🏆 ${T.champion.name}` }),
       T.runnerUp ? h('div', { text: `Runner-up: ${T.runnerUp.name}` }) : null));
@@ -1319,7 +1328,7 @@ function renderBracketSheet() {
     sh.append(h('div', { class: 'panel' },
       h('h3', { text: `Players ${T.entrants.length}/${T.capacity}` }),
       ...T.entrants.map((e) => h('div', { class: 'list-item' }, h('span', { text: e.name }), e.organizer ? h('span', { class: 'badge gold', text: 'Organizer' }) : null)),
-      h('p', { class: 'muted', text: 'Solo players are paired up when the organizer starts. A leftover player gets a bot partner, and empty teams become bot teams.' }),
+      h('p', { class: 'muted', text: 'Solo players are paired up when the organizer starts. A leftover player gets a partner, and empty teams are filled automatically.' }),
       T.isOrganizer ? btn('gold wide', 'Start tournament', () => send({ t: 'startTournament' })) : h('p', { text: 'Waiting for the organizer to start…' })));
   } else {
     const br = h('div', { class: 'bracket' });
@@ -1360,7 +1369,7 @@ function matchCard(m) {
     foot.append(h('span', { class: 'badge live', text: 'Live' }),
       mine ? h('span', { class: 'muted', text: 'your match' }) : btn('small soft', 'Watch', () => send({ t: 'watchTable', id: m.tableId })));
   } else if (m.status === 'done') {
-    foot.append(h('span', { class: 'badge done', text: 'Final' }), h('span', { class: 'muted', text: m.simulated ? 'bots (auto)' : '' }));
+    foot.append(h('span', { class: 'badge done', text: 'Final' }), h('span', { class: 'muted', text: m.simulated ? 'auto-played' : '' }));
   } else {
     foot.append(h('span', { class: 'muted', text: m.teams[0] && m.teams[1] ? 'Starting…' : 'Waiting' }));
   }
@@ -1375,12 +1384,12 @@ function renderEventSheet() {
   if (!E) return;
   const sh = sheetShell(`Tournament · ${E.tables} ${E.tables === 1 ? 'table' : 'tables'}`, E.state, stateBadge(E.state));
   sh.append(codeBox(E.code, 'TOURNAMENT CODE'),
-    h('div', { class: 'muted', text: `Free to join · each table plays one game to ${E.target} · ${bidRuleLabel(E.teamMin)} · up to ${E.capacity} players` }));
+    h('div', { class: 'muted', text: `Free to join · each table plays one game to ${E.target} · ${bidRuleLabel(E.teamMin, E.jokers)} · up to ${E.capacity} players` }));
   if (E.state === 'registering') {
     sh.append(h('div', { class: 'panel' },
       h('h3', { text: `Players ${E.entrants.length}/${E.capacity}` }),
       ...E.entrants.map((e) => h('div', { class: 'list-item' }, h('span', { text: e.name }), e.organizer ? h('span', { class: 'badge gold', text: 'Organizer' }) : null)),
-      h('p', { class: 'muted', text: 'When the organizer starts, players are seated four to a table in the order they joined (partners are neighbours in the list). Bots fill empty seats, and only the tables needed are opened.' }),
+      h('p', { class: 'muted', text: 'When the organizer starts, players are seated four to a table in the order they joined (partners are neighbours in the list). Open seats are filled automatically, and only the tables needed are opened.' }),
       E.isOrganizer ? btn('gold wide', 'Start tournament', () => send({ t: 'startEvent' })) : h('p', { text: 'Waiting for the organizer to start…' })));
   } else {
     if (E.state === 'finished') {

@@ -1,7 +1,7 @@
 // Heuristic bot. chooseBid() estimates tricks from the bot's own hand; choosePlay() picks from
 // legalPlays() only, so it can never make an illegal move. It reads only its own hand plus public state.
 
-import { Card, rankOf, suitOf } from './cards.js';
+import { Card, newDeck, rankOf, suitOf } from './cards.js';
 import { CONFIG } from '../config.js';
 import { GameState, beats, legalBids, legalPlays, partnerOf, teamOf } from './game.js';
 
@@ -20,7 +20,7 @@ export function chooseBid(g: GameState, seat: number, skill: Skill = 'normal'): 
   // Spades: top honors plus length beyond three
   for (const c of spades) {
     const r = rankOf(c);
-    if (r === ACE) est += 1;
+    if (r >= ACE) est += 1; // ace, and in Jokers mode the high 2♠ and both jokers
     else if (r === KING) est += spades.length >= 2 ? 0.9 : 0.4;
     else if (r === QUEEN) est += spades.length >= 3 ? 0.6 : 0.2;
     else if (r === 9 && spades.length >= 4) est += 0.3; // jack
@@ -90,7 +90,7 @@ function currentWinner(g: GameState): { seat: number; card: Card } {
 
 export function choosePlay(g: GameState, seat: number, skill: Skill = 'normal'): Card {
   const legal = legalPlays(g, seat);
-  if (legal.length === 0) throw new Error('Bot has no legal play');
+  if (legal.length === 0) throw new Error('No legal play');
   if (legal.length === 1) return legal[0];
   if (skill === 'strong') return strongPlay(g, seat, legal);
   return normalPlay(g, seat, legal);
@@ -111,7 +111,7 @@ function normalPlay(g: GameState, seat: number, legal: Card[]): Card {
     if (wantTricks || partnerNilAlive) {
       const aces = nonSpades.filter((c) => rankOf(c) === ACE);
       if (aces.length) return aces[0];
-      const bigSpades = g.spadesBroken ? legal.filter((c) => suitOf(c) === 'S' && rankOf(c) >= KING) : [];
+      const bigSpades = g.spadesBroken ? legal.filter((c) => suitOf(c) === 'S' && rankOf(c) >= KING) : []; // includes jokers (ranked above the ace)
       if (bigSpades.length) return highest(bigSpades);
       const kings = nonSpades.filter((c) => rankOf(c) === KING);
       if (kings.length) return kings[0];
@@ -186,7 +186,7 @@ function unseenCards(g: GameState, seat: number): Set<Card> {
   for (const t of g.played ?? []) for (const p of t) known.add(p.card);
   for (const p of g.trick) known.add(p.card);
   const out = new Set<Card>();
-  for (const s of ['S', 'H', 'D', 'C']) for (const r of '23456789TJQKA') if (!known.has(r + s)) out.add(r + s);
+  for (const c of newDeck(g.jokers)) if (!known.has(c)) out.add(c);
   return out;
 }
 

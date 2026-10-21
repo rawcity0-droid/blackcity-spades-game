@@ -23,7 +23,7 @@ test('host with other people at the table: the confirm says who becomes host', (
   const lobby = table({ seats: [seat('human', 'Hosty'), seat('human', 'Gus'), seat('empty'), seat('empty')] });
   assert.equal(tableLeaveConfirm(lobby), 'Leave this table? Gus becomes the host and the table stays open for them.');
   const playing = table({ phase: 'playing', seats: [seat('human', 'Hosty'), seat('bot', 'Ace'), seat('human', 'Gus'), seat('bot', 'Duke')] });
-  assert.equal(tableLeaveConfirm(playing), 'Leave this table? A bot takes your seat and Gus becomes the host. The game goes on for the others.');
+  assert.equal(tableLeaveConfirm(playing), 'Leave this table? A new player takes your seat and Gus becomes the host. The game goes on for the others.');
   assert.equal(tableLeaveConfirm({ ...playing, phase: 'finished' }), null);
 });
 
@@ -40,7 +40,7 @@ test('host who is the only person playing: the table closes, and watchers are me
 
 test('players and watchers keep the old behaviour', () => {
   const seats = [seat('human', 'Hosty'), seat('human', 'Me'), seat('bot'), seat('bot')];
-  assert.equal(tableLeaveConfirm(table({ isHost: false, mySeat: 1, phase: 'bidding', seats })), 'Leave this table? A bot will take your seat.');
+  assert.equal(tableLeaveConfirm(table({ isHost: false, mySeat: 1, phase: 'bidding', seats })), 'Leave this table? A new player will take your seat.');
   assert.equal(tableLeaveConfirm(table({ isHost: false, mySeat: 1, phase: 'waiting', seats })), null);
   assert.equal(tableLeaveConfirm(table({ isHost: false, mySeat: -1, phase: 'playing', seats })), null);
   assert.equal(tableLeaveConfirm(null), null);
@@ -52,7 +52,7 @@ test('bracket / event view: only an organizer leaving before the start cancels i
   assert.equal(sheetLeaveLabel(org), 'Leave tournament');
   assert.match(sheetLeaveConfirm({ ...org, state: 'running' }), /it goes on for everyone else/);
   const player = { joined: true, isOrganizer: false, state: 'running' };
-  assert.equal(sheetLeaveConfirm(player), 'Leave the tournament? A bot takes your place.');
+  assert.equal(sheetLeaveConfirm(player), 'Leave the tournament? A new player takes your place.');
   assert.equal(sheetLeaveLabel(player), 'Leave tournament');
   const viewer = { joined: false, isOrganizer: false, state: 'running' };
   assert.equal(sheetLeaveConfirm(viewer), null);

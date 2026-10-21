@@ -16,7 +16,26 @@ const FACE = '#fffdf6';
 
 export const SUIT_NAMES = { S: 'Spades', H: 'Hearts', D: 'Diamonds', C: 'Clubs' };
 const RANK_NAMES = { A: 'Ace', T: '10', J: 'Jack', Q: 'Queen', K: 'King' };
-export const cardName = (code) => `${RANK_NAMES[code[0]] ?? code[0]} of ${SUIT_NAMES[code[1]]}`;
+const JOKERS = { BS: 'Big Joker', LS: 'Little Joker' };
+// Jokers mode codes: "DS" is the 2 of Spades ranked above the ace, "LS"/"BS" the Little/Big Joker (both trump).
+export const cardName = (code) => JOKERS[code] ?? (code === 'DS' ? '2 of Spades' : `${RANK_NAMES[code[0]] ?? code[0]} of ${SUIT_NAMES[code[1]]}`);
+
+/** Joker face: a big star, the word JOKER and BIG or LITTLE in the corners. Big is gold on indigo, Little indigo on gold. */
+function buildJoker(code) {
+  const big = code === 'BS';
+  const ink = big ? '#2b1a73' : '#b8610a';
+  const svg = s('svg', { viewBox: '0 0 100 140', class: 'card-svg joker', role: 'img', 'aria-label': cardName(code), focusable: 'false' });
+  svg.append(s('rect', { x: 1.5, y: 1.5, width: 97, height: 137, rx: 9, fill: FACE, stroke: OUT, 'stroke-width': 3 }));
+  svg.append(s('rect', { x: 18, y: 30, width: 64, height: 80, rx: 8, fill: big ? '#2b1a73' : GOLD, stroke: OUT, 'stroke-width': 2 }));
+  const star = 'M50 44 L55.3 60.7 L72.8 60.7 L58.7 71 L64 87.7 L50 77.4 L36 87.7 L41.3 71 L27.2 60.7 L44.7 60.7 Z';
+  svg.append(s('path', { d: star, fill: big ? GOLD : '#2b1a73', stroke: OUT, 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  svg.append(s('text', { x: 50, y: 103, 'text-anchor': 'middle', 'font-size': 13, 'font-weight': 900, 'font-family': 'Arial Black, Arial, sans-serif', fill: big ? GOLD : '#2b1a73' }, 'JOKER'));
+  const label = big ? 'BIG' : 'LITTLE';
+  const cornerText = () => s('text', { x: 8, y: 24, 'font-size': big ? 22 : 15, 'font-weight': 900, 'font-family': 'Arial Black, Arial, sans-serif', fill: ink, stroke: FACE, 'stroke-width': 3, 'paint-order': 'stroke' }, label);
+  svg.append(cornerText());
+  svg.append(s('g', { transform: 'rotate(180 50 70)' }, cornerText()));
+  return svg;
+}
 
 // Suit shapes drawn around (0,0) in a roughly 22 x 23 box. Each returns [{tag, attrs}].
 const SHAPES = {
@@ -77,9 +96,12 @@ function corner(rank, suit) {
 }
 
 function buildFront(code) {
+  if (code === 'BS' || code === 'LS') return buildJoker(code);
+  const label = cardName(code);
+  if (code === 'DS') code = '2S'; // the high 2 of Spades looks like any 2 of Spades
   const rank = code[0];
   const suit = code[1];
-  const svg = s('svg', { viewBox: '0 0 100 140', class: 'card-svg', role: 'img', 'aria-label': cardName(code), focusable: 'false' });
+  const svg = s('svg', { viewBox: '0 0 100 140', class: 'card-svg', role: 'img', 'aria-label': label, focusable: 'false' });
   svg.append(s('rect', { x: 1.5, y: 1.5, width: 97, height: 137, rx: 9, fill: FACE, stroke: OUT, 'stroke-width': 3 }));
   if (rank === 'A') {
     svg.append(pip(suit, 50, 72, 54));

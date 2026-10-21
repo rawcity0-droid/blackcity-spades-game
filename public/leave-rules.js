@@ -24,11 +24,11 @@ export function nextHost(t) {
 export function tableLeaveConfirm(t) {
   if (!t || t.mySeat < 0) return null;
   const inPlay = IN_PLAY.has(t.phase);
-  if (!t.isHost) return inPlay ? 'Leave this table? A bot will take your seat.' : null;
+  if (!t.isHost) return inPlay ? 'Leave this table? A new player will take your seat.' : null;
   const heir = nextHost(t);
   if (heir) {
     return inPlay
-      ? `Leave this table? A bot takes your seat and ${heir} becomes the host. The game goes on for the others.`
+      ? `Leave this table? A new player takes your seat and ${heir} becomes the host. The game goes on for the others.`
       : t.phase === 'waiting' ? `Leave this table? ${heir} becomes the host and the table stays open for them.` : null;
   }
   const watching = t.spectators ? ` The table also closes for the ${t.spectators} ${t.spectators === 1 ? 'person' : 'people'} watching.` : '';
@@ -41,8 +41,8 @@ export function tableLeaveConfirm(t) {
 export function sheetLeaveConfirm(s) {
   if (!s || !s.joined || (s.state !== 'registering' && s.state !== 'running')) return null;
   if (s.isOrganizer && s.state === 'registering') return 'Leave the tournament? You are the organizer, so it is cancelled for everyone who joined.';
-  if (s.isOrganizer) return 'Leave the tournament? A bot takes your place and it goes on for everyone else.';
-  return 'Leave the tournament? A bot takes your place.';
+  if (s.isOrganizer) return 'Leave the tournament? A new player takes your place and it goes on for everyone else.';
+  return 'Leave the tournament? A new player takes your place.';
 }
 
 /** Label of the sheet's leave button. */

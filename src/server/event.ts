@@ -41,6 +41,8 @@ export interface EventInit {
   organizerId: string;
   /** Premium host's bidding rule for every table this opens: true = partners must bid at least CONFIG.rules.premiumTeamMin together. Default true. */
   teamMin4?: boolean;
+  /** Jokers mode for every table this opens (implies Team min 4, no bags). */
+  jokers?: boolean;
   host: EventHost;
 }
 
@@ -54,6 +56,7 @@ export class TableEvent {
   readonly target: number;
   readonly organizerId: string;
   readonly teamMin4: boolean;
+  readonly jokers: boolean;
   readonly createdAt = Date.now();
   state: EState = 'registering';
   finishedAt: number | null = null;
@@ -68,7 +71,8 @@ export class TableEvent {
     this.tables = init.tables;
     this.target = init.target;
     this.organizerId = init.organizerId;
-    this.teamMin4 = init.teamMin4 !== false;
+    this.jokers = init.jokers === true;
+    this.teamMin4 = this.jokers || init.teamMin4 !== false;
     this.host = init.host;
   }
 
@@ -168,6 +172,7 @@ export class TableEvent {
       code: this.code,
       tables: this.tables,
       teamMin: this.teamMin4 ? CONFIG.rules.premiumTeamMin : 0,
+      jokers: this.jokers,
       target: this.target,
       state: this.state,
       isOrganizer: pid === this.organizerId,

@@ -58,6 +58,7 @@ export interface TableInit {
   sandbags?: boolean;
   hostId: string | null;
   practice?: boolean; // a solo table against bots: never listed, never joinable by anyone else
+  jokers?: boolean; // Jokers mode (Premium-hosted): jokers deck, team min 4, no Nil, no bags
   teamMin?: number; // the partners' bids must add up to at least this (Premium-hosted tables); 0 or unset = regular spades
   quick?: boolean; // made by Quick play (random match): only changes how the table is labelled
   timings: Timings;
@@ -88,6 +89,7 @@ export class Table {
   readonly quick: boolean;
   startedAt = 0;
   teamMin: number;
+  jokers: boolean;
   seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
   watchers = new Set<string>();
   waiters: string[] = [];                 // watchers who asked for a seat; seated between hands
@@ -127,7 +129,8 @@ export class Table {
     this.creatorId = init.hostId;
     this.practice = init.practice === true;
     this.quick = init.quick === true;
-    this.teamMin = init.teamMin ?? 0;
+    this.jokers = !!init.jokers && !init.quick && !init.practice;
+    this.teamMin = this.jokers ? CONFIG.rules.premiumTeamMin : init.teamMin ?? 0;
     this.timings = init.timings;
     this.hooks = init.hooks;
     this.rng = init.rng ?? secureRng;
@@ -265,7 +268,7 @@ export class Table {
   }
 
   /** Host only, before the game starts: change target / break rule / sandbags. */
-  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean }): Result {
+  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean; jokers?: boolean }): Result {
     if (this.status !== 'waiting') return fail('wrong_state', 'Rules can only be changed before the game starts');
     if (pid !== this.hostId) return fail('not_allowed', 'Only the host can change the rules');
     if (patch.target !== undefined) {
@@ -276,6 +279,10 @@ export class Table {
     if (patch.sandbags !== undefined) this.sandbags = patch.sandbags;
     // Bidding rule (Premium-hosted tables only; Play now / quick and practice tables always use regular bidding)
     if (patch.teamMin4 !== undefined && !this.quick && !this.practice) this.teamMin = patch.teamMin4 ? CONFIG.rules.premiumTeamMin : 0;
+    if ((patch.teamMin4 !== undefined || patch.jokers !== undefined) && !this.quick && !this.practice) {
+      this.jokers = !!patch.jokers;
+      if (this.jokers) this.teamMin = CONFIG.rules.premiumTeamMin;
+    }
     this.broadcast();
     this.hooks.changed();
     return { ok: true };
@@ -284,7 +291,7 @@ export class Table {
   /** Host only, before the game starts: fill every open seat with a bot. */
   addBots(pid: string): Result {
     if (this.status !== 'waiting') return fail('wrong_state', 'Game already started');
-    if (pid !== this.hostId) return fail('not_allowed', 'Only the host can add bots');
+    if (pid !== this.hostId) return fail('not_allowed', 'Only the host can fill seats');
     this.seats.forEach((s, i) => { if (s.kind === 'empty') this.seatBot(i); });
     this.broadcast();
     this.hooks.changed();
@@ -310,7 +317,7 @@ export class Table {
   startGame(): void {
     this.seats.forEach((s, i) => { if (s.kind === 'empty') this.seatBot(i); });
     this.teamHadHumans = [0, 1].map((t) => this.seats.some((s, i) => i % 2 === t && s.kind === 'human')) as [boolean, boolean];
-    this.game = createGame({ target: this.target, breakRule: this.breakRule, sandbags: this.sandbags, teamMin: this.teamMin, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
+    this.game = createGame({ target: this.target, breakRule: this.breakRule, sandbags: this.jokers ? false : this.sandbags, teamMin: this.teamMin, jokers: this.jokers, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
     this.status = 'playing';
     this.startedAt = Date.now();
     this.hooks.gameStarted?.(this);
@@ -347,7 +354,7 @@ export class Table {
     const i = this.seatOf(pid);
     if (i < 0) return fail('not_seated', 'Spectators cannot act');
     if (!g || this.status !== 'playing' || this.pause) return fail('wrong_state', 'Not now');
-    if (this.seats[i].botControlled) return fail('wrong_state', 'A bot is playing your seat until the next hand');
+    if (this.seats[i].botControlled) return fail('wrong_state', 'Your seat is on auto-play until the next hand');
     try { placeBid(g, i, bid); } catch (e) { return this.engineFail(e); }
     this.botChat.onBid(i, bid, !this.teamMin);
     this.broadcast();
@@ -360,7 +367,7 @@ export class Table {
     const i = this.seatOf(pid);
     if (i < 0) return fail('not_seated', 'Spectators cannot act');
     if (!g || this.status !== 'playing' || this.pause) return fail('wrong_state', 'Not now');
-    if (this.seats[i].botControlled) return fail('wrong_state', 'A bot is playing your seat until the next hand');
+    if (this.seats[i].botControlled) return fail('wrong_state', 'Your seat is on auto-play until the next hand');
     let out: PlayOutcome;
     try { out = playCard(g, i, card); } catch (e) { return this.engineFail(e); }
     this.afterPlay(out);
@@ -612,9 +619,9 @@ export class Table {
       isPublic: this.isPublic,
       practice: this.practice,
       quick: this.quick,
-      bidRules: { minBid: CONFIG.rules.minBid, maxBid: CONFIG.rules.maxBid, allowNil: CONFIG.rules.allowNil, teamMin: this.teamMin },
+      bidRules: { minBid: CONFIG.rules.minBid, maxBid: CONFIG.rules.maxBid, allowNil: CONFIG.rules.allowNil, teamMin: this.teamMin, jokers: this.jokers },
       target: this.target,
-      rules: { target: this.target, breakRule: this.breakRule, sandbags: this.sandbags },
+      rules: { target: this.target, breakRule: this.breakRule, sandbags: this.jokers ? false : this.sandbags, jokers: this.jokers },
       hostSeat: this.hostId ? this.seatOf(this.hostId) : -1,
       phase,
       mySeat: me,

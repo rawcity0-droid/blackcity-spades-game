@@ -48,6 +48,7 @@ export interface GameState {
   target: number;
   breakRule: boolean;   // true: spades cannot be led until broken (default). false: lead spades any time.
   sandbags: boolean;    // true: bags are counted and penalised (default). false: no bag points, no counting, no penalty.
+  jokers: boolean;      // Jokers mode: 2♦/2♥ out, Big and Little Joker in as top trumps (see cards.ts); no Nil, no bags
   teamMin: number;      // the two partners' bids must add up to at least this (0 = no team minimum)
   rng: Rng;
   phase: Phase;
@@ -68,14 +69,15 @@ export interface GameState {
   winner: Team | null;
 }
 
-export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean; teamMin?: number }
+export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean; teamMin?: number; jokers?: boolean }
 
 export function createGame(opts: GameOptions = {}): GameState {
   const g: GameState = {
     target: opts.target ?? 500,
     breakRule: opts.breakRule ?? true,
-    sandbags: opts.sandbags ?? true,
-    teamMin: opts.teamMin ?? 0,
+    sandbags: opts.jokers ? false : opts.sandbags ?? true,
+    jokers: !!opts.jokers,
+    teamMin: opts.jokers ? Math.max(opts.teamMin ?? 0, CONFIG.rules.premiumTeamMin) : opts.teamMin ?? 0,
     rng: opts.rng ?? secureRng,
     phase: 'bidding',
     handNo: 0,
@@ -99,7 +101,7 @@ export function createGame(opts: GameOptions = {}): GameState {
 
 function dealNewHand(g: GameState): void {
   g.handNo += 1;
-  g.hands = dealHands(g.rng);
+  g.hands = dealHands(g.rng, g.jokers);
   g.bids = [null, null, null, null];
   g.trick = [];
   g.lastTrick = null;

@@ -48,6 +48,8 @@ export interface TournamentInit {
   organizerId: string;
   /** Premium host's bidding rule for every table this opens: true = partners must bid at least CONFIG.rules.premiumTeamMin together. Default true. */
   teamMin4?: boolean;
+  /** Jokers mode for every table this opens (implies Team min 4, no bags). */
+  jokers?: boolean;
   isPublic: boolean;
   host: TournamentHost;
   rng?: Rng;
@@ -64,6 +66,7 @@ export class Tournament {
   readonly size: number;
   readonly organizerId: string;
   readonly teamMin4: boolean;
+  readonly jokers: boolean;
   readonly isPublic: boolean;
   readonly createdAt = Date.now();
   state: TState = 'registering';
@@ -81,7 +84,8 @@ export class Tournament {
     this.code = init.code;
     this.size = init.size;
     this.organizerId = init.organizerId;
-    this.teamMin4 = init.teamMin4 !== false;
+    this.jokers = init.jokers === true;
+    this.teamMin4 = this.jokers || init.teamMin4 !== false;
     this.isPublic = init.isPublic;
     this.host = init.host;
     this.rng = init.rng ?? secureRng;
@@ -273,6 +277,7 @@ export class Tournament {
       state: this.state,
       isPublic: this.isPublic,
       teamMin: this.teamMin4 ? CONFIG.rules.premiumTeamMin : 0,
+      jokers: this.jokers,
       isOrganizer: pid === this.organizerId,
       joined: this.hasPlayer(pid),
       capacity: this.maxEntrants,

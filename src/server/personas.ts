@@ -49,5 +49,5 @@ export function pickPersona(rng: Rng, used: Set<string>): Persona {
   if (faces.length && rng() < CONFIG.botFaces.chance) return { ...faces[Math.floor(rng() * faces.length)], chatStyle, skill };
   const free = BOT_NAMES.filter((n) => !used.has(n));
   if (free.length) return { name: free[Math.floor(rng() * free.length)], chatStyle, skill };
-  for (let n = 2; ; n++) if (!used.has(`Bot ${n}`)) return { name: `Bot ${n}`, chatStyle, skill };
+  for (let n = 2; ; n++) if (!used.has(`Player ${n}`)) return { name: `Player ${n}`, chatStyle, skill };
 }

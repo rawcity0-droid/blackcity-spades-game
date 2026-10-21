@@ -317,11 +317,11 @@ export class Hub {
     }
     switch (msg.t) {
       case 'setNick': p.nick = msg.nick; return this.send(p.id, { t: 'nick', nick: p.nick });
-      case 'createTable': return this.createTable(p, msg.isPublic, msg.target, msg.breakRule, msg.sandbags, practice, msg.teamMin4 !== false);
+      case 'createTable': return this.createTable(p, msg.isPublic, msg.target, msg.breakRule, msg.sandbags, practice, msg.teamMin4 !== false, msg.jokers === true);
       case 'setRules': return this.tableAction(p, (t) => t.setRules(p.id, msg));
       case 'addBots': return this.tableAction(p, (t) => t.addBots(p.id));
       case 'swapPartners': return this.tableAction(p, (t) => t.swapPartners(p.id));
-      case 'createEvent': return this.createEvent(p, msg.tables, msg.target ?? CONFIG.eventTarget, msg.teamMin4 !== false);
+      case 'createEvent': return this.createEvent(p, msg.tables, msg.target ?? CONFIG.eventTarget, msg.teamMin4 !== false, msg.jokers === true);
       case 'startEvent': return this.startEvent(p);
       case 'leaveEvent': return this.leaveEvent(p);
       case 'joinTable': return this.joinTable(p, this.tables.get(msg.id), true);
@@ -336,7 +336,7 @@ export class Hub {
       case 'ready': return this.tableAction(p, (t) => t.ready(p.id));
       case 'rematch': return this.tableAction(p, (t) => t.rematch(p.id));
       case 'leaveTable': return this.leaveTable(p);
-      case 'createTournament': return this.createTournament(p, msg.size, msg.isPublic, msg.teamMin4 !== false);
+      case 'createTournament': return this.createTournament(p, msg.size, msg.isPublic, msg.teamMin4 !== false, msg.jokers === true);
       case 'joinTournament': return this.joinTournament(p, this.tournaments.get(msg.id), true);
       case 'watchTournament': return this.watchTournament(p, this.tournaments.get(msg.id));
       case 'startTournament': return this.startTournament(p);
@@ -392,11 +392,11 @@ export class Hub {
 
   // ---------- tables ----------
 
-  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; practice?: boolean; quick?: boolean; teamMin4?: boolean; tournament?: { id: string; matchId: string; label: string } }): Table {
+  private makeTable(opts: { isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; hostId: string | null; practice?: boolean; quick?: boolean; teamMin4?: boolean; jokers?: boolean; tournament?: { id: string; matchId: string; label: string } }): Table {
     const id = this.newId((x) => this.tables.has(x));
     const code = this.newCode();
     const table = new Table({
-      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, quick: opts.quick, teamMin: opts.quick || opts.practice || opts.teamMin4 === false ? 0 : CONFIG.rules.premiumTeamMin, timings: this.timings,
+      id, code, isPublic: opts.isPublic, target: opts.target, breakRule: opts.breakRule, sandbags: opts.sandbags, hostId: opts.hostId, practice: opts.practice, quick: opts.quick, teamMin: opts.quick || opts.practice || opts.teamMin4 === false ? 0 : CONFIG.rules.premiumTeamMin, jokers: opts.jokers === true, timings: this.timings,
       tournament: opts.tournament, rng: this.rng,
       hooks: {
         send: (pid, msg) => this.send(pid, msg),
@@ -489,7 +489,7 @@ export class Hub {
     if (p.watchTableId) { this.tables.get(p.watchTableId)?.unwatch(p.id); p.watchTableId = null; }
   }
 
-  private createTable(p: Player, isPublic: boolean, target: number, breakRule?: boolean, sandbags?: boolean, practice = false, teamMin4 = true): void {
+  private createTable(p: Player, isPublic: boolean, target: number, breakRule?: boolean, sandbags?: boolean, practice = false, teamMin4 = true, jokers = false): void {
     if (!practice) {
       if (!isPublic && CONFIG.hostOnly.privateTables && !this.isSubscribed(p)) return this.err(p, 'upgrade_required', upgradeMessage());
       if (this.needsInvite(p)) return this.err(p, 'upgrade_required', inviteMessage());
@@ -499,7 +499,7 @@ export class Hub {
     if (this.tables.size >= CONFIG.limits.maxTables) return this.err(p, 'too_many', 'The server is busy. Try again soon');
     this.leaveCurrent(p);
     // Practice is a solo table against bots: not public, so it is never listed or joinable by id, and joining it by code is refused too.
-    const table = this.makeTable({ isPublic: practice ? false : isPublic, target, breakRule, sandbags, hostId: p.id, practice, teamMin4 });
+    const table = this.makeTable({ isPublic: practice ? false : isPublic, target, breakRule, sandbags, hostId: p.id, practice, teamMin4, jokers });
     table.seatHuman(0, p.id, p.nick || (practice ? 'You' : ''), true);
     p.tableId = table.id;
     table.broadcast();
@@ -658,7 +658,7 @@ export class Hub {
 
   // ---------- tournaments ----------
 
-  private createTournament(p: Player, size: number, isPublic: boolean, teamMin4 = true): void {
+  private createTournament(p: Player, size: number, isPublic: boolean, teamMin4 = true, jokers = false): void {
     if (CONFIG.hostOnly.hostTournaments && !this.isSubscribed(p)) return this.err(p, 'upgrade_required', upgradeMessage());
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
@@ -666,7 +666,7 @@ export class Hub {
     this.leaveCurrent(p);
     const id = this.newId((x) => this.tournaments.has(x));
     const code = this.newCode();
-    const t = new Tournament({ id, code, size, organizerId: p.id, isPublic, teamMin4, rng: this.rng, host: this.tournamentHost() });
+    const t = new Tournament({ id, code, size, organizerId: p.id, isPublic, teamMin4, jokers, rng: this.rng, host: this.tournamentHost() });
     this.tournaments.set(id, t);
     this.codes.set(code, { kind: 'tournament', id });
     t.join(p.id, p.nick);
@@ -752,7 +752,7 @@ export class Hub {
   }
 
   private createMatchTable(t: Tournament, m: Match, label: string): { id: string; code: string } {
-    const table = this.makeTable({ isPublic: false, target: m.target, hostId: null, teamMin4: t.teamMin4, tournament: { id: t.id, matchId: m.id, label } });
+    const table = this.makeTable({ isPublic: false, target: m.target, hostId: null, teamMin4: t.teamMin4, jokers: t.jokers, tournament: { id: t.id, matchId: m.id, label } });
     m.teams.forEach((team, side) => {
       const seats = side === 0 ? [0, 2] : [1, 3];
       team!.slots.forEach((slot, k) => {
@@ -772,7 +772,7 @@ export class Hub {
 
   // ---------- multi-table events ("Create Tournament", one to eight tables) ----------
 
-  private createEvent(p: Player, tables: number, target: number, teamMin4 = true): void {
+  private createEvent(p: Player, tables: number, target: number, teamMin4 = true, jokers = false): void {
     if (CONFIG.hostOnly.hostTournaments && !this.isSubscribed(p)) return this.err(p, 'upgrade_required', upgradeMessage());
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
@@ -780,7 +780,7 @@ export class Hub {
     this.leaveCurrent(p);
     const id = this.newId((x) => this.events.has(x));
     const code = this.newCode();
-    const ev = new TableEvent({ id, code, tables, target, teamMin4, organizerId: p.id, host: this.eventHost() });
+    const ev = new TableEvent({ id, code, tables, target, teamMin4, jokers, organizerId: p.id, host: this.eventHost() });
     this.events.set(id, ev);
     this.codes.set(code, { kind: 'event', id });
     ev.join(p.id, p.nick);
@@ -855,7 +855,7 @@ export class Hub {
 
   private createEventTable(ev: TableEvent, entry: EventTableEntry): { id: string; code: string } {
     const table = this.makeTable({
-      isPublic: false, target: ev.target, hostId: null, teamMin4: ev.teamMin4,
+      isPublic: false, target: ev.target, hostId: null, teamMin4: ev.teamMin4, jokers: ev.jokers,
       tournament: { id: ev.id, matchId: `t${entry.no}`, label: `Table ${entry.no} · to ${ev.target}` },
     });
     entry.seats.forEach((slot, seat) => {

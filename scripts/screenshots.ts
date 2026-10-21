@@ -244,7 +244,7 @@ async function main() {
     await sleep(300);
     await shot(page, 'ui-ph390-13-host-lobby-2-players-rules-changed.png');
     await shot(guest, 'ui-ph390-14-guest-lobby.png');
-    await clickText(page, '.btn', 'Add Bots');
+    await clickText(page, '.btn', 'Fill seats');
     await page.waitForFunction(() => document.querySelectorAll('.seatcard.vacant').length === 0);
     await sleep(300);
     await shot(page, 'ui-ph390-15-host-lobby-full.png');
