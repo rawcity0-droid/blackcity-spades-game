@@ -9,7 +9,7 @@ import {
   teamOf, PlayOutcome,
 } from '../engine/game.js';
 import { Skill, chooseBid, choosePlay } from '../engine/bot.js';
-import { BotChat } from './botchat.js';
+import { Attitude, BotChat } from './botchat.js';
 import { Persona, pickPersona } from './personas.js';
 
 export type SeatKind = 'empty' | 'bot' | 'human';
@@ -25,7 +25,7 @@ export interface SeatInfo {
   disconnectedAt: number | null;
   ready: boolean;
   face?: string;            // bots only: id of a profile photo in public/faces
-  chatStyle?: 'chill' | 'trash';    // bots only: 'trash' bots talk more smack in the chat
+  chatStyle?: 'chill' | 'trash' | 'elite'; // bots only: 'trash' bots talk smack, 'elite' bots are cocky (and talk smack too)
   skill?: Skill;            // bots only: 'strong' bots play better (src/engine/bot.ts)
 }
 
@@ -142,7 +142,7 @@ export class Table {
     this.rng = init.rng ?? secureRng;
     this.botChat = new BotChat({
       rng: this.rng,
-      bots: () => this.seats.map((s, i) => ({ seat: i, name: s.name, kind: s.kind, trash: s.chatStyle === 'trash' })).filter((b) => b.kind === 'bot'),
+      bots: () => this.seats.map((s, i) => ({ seat: i, name: s.name, kind: s.kind, trash: s.chatStyle === 'trash' || s.chatStyle === 'elite', attitude: (s.chatStyle === 'elite' ? 'elite' : s.chatStyle === 'trash' ? 'competitive' : 'friendly') as Attitude })).filter((b) => b.kind === 'bot'),
       humans: () => this.seats.map((s, i) => ({ seat: i, name: s.name, kind: s.kind, on: s.connected })).filter((h) => h.kind === 'human' && h.on),
       say: (seat, name, text) => this.postBotChat(seat, name, text),
       playing: () => this.status === 'playing',
@@ -397,7 +397,11 @@ export class Table {
       const nilBust = !this.teamMin && this.game?.bids[w] === 0 && this.game.tricksWon[w] === 1; // a Nil bid just took its first trick
       this.botChat.onTrick(w, nilBust);
     }
-    if (out.handDone && this.game?.lastHand) { const r = this.game.lastHand.teams; this.botChat.onHandEnd([r[0].made, r[1].made]); }
+    if (out.handDone && this.game?.lastHand) {
+      const L = this.game.lastHand;
+      const nils = L.teams.flatMap((t, team) => t.nil.map((n) => ({ team, made: n.made })));
+      this.botChat.onHandEnd([L.teams[0].made, L.teams[1].made], { nils, scores: L.scores, target: this.game.target });
+    }
     const pauseMs = this.fastForward ? 0 : this.timings.trickPauseMs;
     if (out.trick && pauseMs > 0 && !out.handDone) {
       // The hand goes on: show the finished trick (and its winner) for a moment, but let the winner lead at once.

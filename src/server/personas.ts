@@ -5,7 +5,8 @@ import { CONFIG } from '../config.js';
 import { Rng } from '../engine/cards.js';
 import { Skill } from '../engine/bot.js';
 
-export type ChatStyle = 'chill' | 'trash';
+/** chill: friendly; trash: competitive smack talk; elite: cocky, looks down on the other team. */
+export type ChatStyle = 'chill' | 'trash' | 'elite';
 export interface Persona { name: string; face?: string; chatStyle: ChatStyle; skill: Skill }
 
 export const BOT_NAMES = [
@@ -42,7 +43,8 @@ export const RAW_ONE = { name: 'Raw 1', face: 'raw1' };
 
 /** Pick a persona whose name is not in `used` (names already taken at the table or in the tournament). */
 export function pickPersona(rng: Rng, used: Set<string>): Persona {
-  const chatStyle: ChatStyle = rng() < CONFIG.botPersonality.trashChance ? 'trash' : 'chill';
+  const roll = rng();
+  const chatStyle: ChatStyle = roll < CONFIG.botPersonality.eliteChance ? 'elite' : roll < CONFIG.botPersonality.eliteChance + CONFIG.botPersonality.trashChance ? 'trash' : 'chill';
   const skill: Skill = rng() < CONFIG.botPersonality.strongChance ? 'strong' : 'normal';
   if (!used.has(RAW_ONE.name) && rng() < CONFIG.botFaces.rawOneChance) return { ...RAW_ONE, chatStyle, skill };
   const faces = FACE_BOTS.filter((f) => !used.has(f.name));

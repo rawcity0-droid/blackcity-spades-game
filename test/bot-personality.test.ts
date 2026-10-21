@@ -19,7 +19,7 @@ function makeTable() {
 }
 
 test('bots get a mix of chat styles and skills, and the table view never shows them', () => {
-  const style = { chill: 0, trash: 0 }, skill = { normal: 0, strong: 0 };
+  const style = { chill: 0, trash: 0, elite: 0 }, skill = { normal: 0, strong: 0 };
   for (let n = 0; n < 200; n++) {
     const t = makeTable();
     t.seatHuman(0, 'p1', 'Raw', true);
@@ -30,7 +30,7 @@ test('bots get a mix of chat styles and skills, and the table view never shows t
     for (const s of v.seats) { assert.equal(s.skill, undefined); assert.equal(s.chatStyle, undefined); }
     t.dispose();
   }
-  assert.ok(style.trash > 120 && style.chill > 300, JSON.stringify(style));
+  assert.ok(style.trash > 120 && style.chill > 250 && style.elite > 40, JSON.stringify(style)); // friendly, competitive, elite
   assert.ok(skill.strong > 120 && skill.normal > 300, JSON.stringify(skill));
 });
 

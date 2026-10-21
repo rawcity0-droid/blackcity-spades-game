@@ -15,8 +15,133 @@ export interface BotChatHost {
   playing(): boolean;
 }
 
-/** trash: this bot is a trash talker (uses the TRASH_* lines on top of the friendly ones). */
-type Bot = { seat: number; name: string; trash?: boolean };
+/** trash: this bot is a trash talker (uses the TRASH_* lines on top of the friendly ones).
+ *  attitude: friendly (default), competitive (trash talker) or elite (cocky: looks down on the other team). */
+export type Attitude = 'friendly' | 'competitive' | 'elite';
+type Bot = { seat: number; name: string; trash?: boolean; attitude?: Attitude };
+const attitudeOf = (b: Bot): Attitude => b.attitude ?? (b.trash ? 'competitive' : 'friendly');
+
+/** Big moments start a short reply chain: one player reacts, their partner backs them up, an opponent answers.
+ *  `lead` is said by the team the moment is good for (or about), `backup` by that player's partner, `reply` by the other team.
+ *  PG-13 card-table talk only: no threats, no slurs, nothing about who people are. Exported for the clean-words test. */
+type Lines = Record<Attitude, string[]>;
+export const MOMENT_LINES: Record<'set' | 'nilMade' | 'nilBroken' | 'run' | 'close' | 'gameEnd', { lead: Lines; backup: Lines; reply: Lines }> = {
+  set: { // the team that made it while the other team got set
+    lead: {
+      friendly: ['Whew, we got through that one', 'Made it! Tough hand for y’all'],
+      competitive: ['Set! Write that down', 'Y’all got set. Count your books next time', 'Overbid and underdelivered'],
+      elite: ['We run this table', 'Y’all scared of the board', 'Bring the 2 of spades next time', 'This is what top tier looks like', 'Elite table, elite books'],
+    },
+    backup: {
+      friendly: ['Nice work, partner', 'Good teamwork right there'],
+      competitive: ['Tell ’em, partner', 'That’s how we do it', 'Facts. We don’t miss'],
+      elite: ['Said what I said 💅', 'Partner, they not ready for us', 'Light work. Next hand'],
+    },
+    reply: {
+      friendly: ['Okay, okay, y’all got that one', 'Good hand, we’ll get the next one'],
+      competitive: ['Relax, it’s one hand', 'Keep that same energy when we come back', 'Scoreboard ain’t final yet', 'Enjoy it, it won’t last'],
+      elite: ['A lucky hand doesn’t make y’all elite', 'Cute. We’re still the better team', 'One set and they think they’re champions'],
+    },
+  },
+  nilMade: { // the team whose Nil held
+    lead: {
+      friendly: ['Nil made! Didn’t think that was gonna happen', 'Whew, Nil held up'],
+      competitive: ['Nil made. Y’all couldn’t catch me', 'Couldn’t touch me all hand'],
+      elite: ['Nil made. Clean. Like always', 'Zero books, a hundred points. Easy', 'Y’all never had a chance at that Nil'],
+    },
+    backup: {
+      friendly: ['Great Nil, partner!', 'Nice job covering that'],
+      competitive: ['I had your back the whole way', 'That’s my partner right there'],
+      elite: ['Covered like a pro', 'We make it look easy'],
+    },
+    reply: {
+      friendly: ['Okay, nice Nil', 'Respect, that was a good Nil'],
+      competitive: ['Next time we’re coming for that Nil', 'Lucky. Try that again'],
+      elite: ['Enjoy it. That won’t happen twice', 'We let that one slide'],
+    },
+  },
+  nilBroken: { // the team that broke the other team’s Nil
+    lead: {
+      friendly: ['Oof, sorry about the Nil', 'Got the Nil, sorry y’all'],
+      competitive: ['Nil busted! Thank you, come again', 'There goes the Nil. Should’ve bid 2'],
+      elite: ['A Nil? Against us? Come on now', 'Nobody hides from us'],
+    },
+    backup: {
+      friendly: ['Good catch, partner', 'Tough break for them'],
+      competitive: ['We saw that coming a mile away', 'Caught ’em slipping'],
+      elite: ['Too easy, partner', 'They really thought that would work'],
+    },
+    reply: {
+      friendly: ['Ha, worth a try', 'Ah well, we’ll still make our bid'],
+      competitive: ['It’s fine, we’re still making the bid', 'Laugh now, we’ll get it back'],
+      elite: ['One hand. We’re still running this', 'Don’t get comfortable'],
+    },
+  },
+  run: { // the team that just took four tricks in a row
+    lead: {
+      friendly: ['Cards are being nice to us', 'On a little roll here'],
+      competitive: ['Keep ’em coming', 'Book after book after book', 'You can’t hang with this'],
+      elite: ['Too easy', 'We run this table', 'Take notes', 'Bring the 2 of spades next time'],
+    },
+    backup: {
+      friendly: ['Keep it going!', 'Nice run, partner'],
+      competitive: ['We locked in', 'Don’t stop now'],
+      elite: ['They’re not ready for this', 'Partner, we’re just warming up'],
+    },
+    reply: {
+      friendly: ['Okay, save some books for us', 'Y’all are rolling'],
+      competitive: ['Enjoy it while it lasts', 'Long hand, we’re not done', 'Big talk, let’s see the final count'],
+      elite: ['Lucky cards. We’re still the better team', 'Cute run. Watch this'],
+    },
+  },
+  close: { // close score late in the game; lead is the team that is ahead
+    lead: {
+      friendly: ['Tight game, this is fun', 'Close one, let’s finish strong'],
+      competitive: ['Close game, no mistakes now', 'Every book counts from here'],
+      elite: ['Close? Nah. We’re just making it interesting', 'Pressure is a privilege. We live here'],
+    },
+    backup: {
+      friendly: ['We got this, partner', 'Steady, steady'],
+      competitive: ['We got this', 'Lock in, partner'],
+      elite: ['This is our table', 'They know how this ends'],
+    },
+    reply: {
+      friendly: ['Anybody’s game right now', 'Good game either way'],
+      competitive: ['Nah, this one is ours', 'Y’all scared of the board?', 'We’re right there, don’t blink'],
+      elite: ['We’ve been here before. Y’all haven’t', 'Watch how champions close'],
+    },
+  },
+  gameEnd: { // the winning team
+    lead: {
+      friendly: ['gg everybody, that was fun', 'Good game, y’all'],
+      competitive: ['That’s game. Run it back if you want another lesson', 'gg, put some respect on our names'],
+      elite: ['We run this table. gg', 'That’s game. Y’all can take notes on the way out', 'Elite. gg though'],
+    },
+    backup: {
+      friendly: ['Great game, partner', 'Fun one, y’all'],
+      competitive: ['Told y’all', 'Never in doubt'],
+      elite: ['Another one 💅', 'Like we said: our table'],
+    },
+    reply: {
+      friendly: ['gg, y’all played well', 'Good game, run it back?'],
+      competitive: ['Run it back. That was a warm-up', 'Lucky cards, that’s all that was', 'gg. Next one is ours'],
+      elite: ['Enjoy it. That won’t happen again', 'Fine. gg. Rematch, right now'],
+    },
+  },
+};
+
+/** Every line a computer player can say (for the clean-words test). */
+export function allChatLines(): string[] {
+  const out: string[] = [...THREADS.flat(), ...QUIPS, ...HELLO, ...HELLO_BACK, ...GG_BACK, ...THANKS_BACK, ...LAUGH_BACK, ...QUESTION_BACK, ...BOTQ_BACK,
+    ...GENERIC_BACK, ...TRASH_BACK, ...BIG_BID, ...NIL, ...WIN_TRICK, ...HUMAN_WIN_TRICK, ...SET, ...MADE, ...GAME_WIN, ...GAME_LOSE, ...Object.values(TRASH_LINES).flat()];
+  for (const m of Object.values(MOMENT_LINES)) for (const part of [m.lead, m.backup, m.reply]) out.push(...Object.values(part).flat());
+  return out;
+}
+
+/** Most lines the computer players say per hand (reply chains included), so the chat never floods. */
+export const MAX_LINES_PER_HAND = 6;
+/** Pause between reply chains. */
+const CHAIN_GAP_MS = 20000;
 
 /** Talks that run for a few lines, alternating between two (or three) bots. {H} is a player's name, {B} the other bot's name. */
 const THREADS: string[][] = [
@@ -89,6 +214,9 @@ export class BotChat {
   private usedThreads = new Set<number>();
   private on = false;
   private greeted = false;
+  private linesThisHand = 0;   // rate limit: MAX_LINES_PER_HAND
+  private lastChain = -Infinity;
+  private run = { team: -1, count: 0 }; // tricks in a row by one team this hand
 
   /** pace scales every delay: 1 is normal speed, a small number is for tests, 0 turns bot chat off. */
   constructor(private host: BotChatHost, private pace: number) {}
@@ -129,6 +257,9 @@ export class BotChat {
   /** nilBust: the winner had bid Nil and this was their first trick. */
   onTrick(winner: number, nilBust = false): void {
     if (!this.ready()) return;
+    const team = winner % 2;
+    this.run = this.run.team === team ? { team, count: this.run.count + 1 } : { team, count: 1 };
+    if (this.run.count === 4 && this.chain('run', team)) return;
     if (nilBust) {
       const trash = this.trashOpponent(winner);
       if (trash && this.chance(0.8)) return this.sayAs(trash, TRASH_LINES.nilBust);
@@ -141,9 +272,20 @@ export class BotChat {
     if (human && this.chance(0.15)) return this.sayOne(this.pickOther(this.host.bots(), winner), HUMAN_WIN_TRICK, { H: human.name });
   }
 
-  /** teamsMade: for each team, whether it made its bid (null if it had no bid). */
-  onHandEnd(teamsMade: [boolean | null, boolean | null]): void {
-    if (!this.ready() || this.cooling() || !this.chance(0.6)) return;
+  /** teamsMade: for each team, whether it made its bid (null if it had no bid).
+   *  extra: Nil results ({team, made}) and the scores after the hand, for the big-moment reply chains. */
+  onHandEnd(teamsMade: [boolean | null, boolean | null], extra: { nils?: { team: number; made: boolean }[]; scores?: [number, number]; target?: number } = {}): void {
+    this.linesThisHand = 0;
+    this.run = { team: -1, count: 0 };
+    if (!this.ready()) return;
+    // Big moments first: a set, a Nil made or broken, a close score late in the game
+    if (teamsMade[0] === false && teamsMade[1] !== false && this.chain('set', 1)) return;
+    if (teamsMade[1] === false && teamsMade[0] !== false && this.chain('set', 0)) return;
+    const nil = extra.nils?.[0];
+    if (nil && this.chain(nil.made ? 'nilMade' : 'nilBroken', nil.made ? nil.team : 1 - nil.team)) return;
+    const sc = extra.scores;
+    if (sc && extra.target && Math.abs(sc[0] - sc[1]) <= 40 && Math.max(sc[0], sc[1]) >= extra.target * 0.7 && this.chain('close', sc[0] >= sc[1] ? 0 : 1)) return;
+    if (this.cooling() || !this.chance(0.6)) return;
     const bots = this.host.bots();
     if (!bots.length) return;
     const bot = bots[Math.floor(this.host.rng() * bots.length)];
@@ -160,6 +302,9 @@ export class BotChat {
     if (!this.ready()) return;
     const bots = this.host.bots();
     if (!bots.length) return;
+    this.linesThisHand = 0;
+    this.lastChain = -Infinity; // the end of the game always gets its say
+    if (this.chain('gameEnd', winnerTeam, 1500)) return;
     const bot = bots[Math.floor(this.host.rng() * bots.length)];
     const won = bot.seat % 2 === winnerTeam;
     const pool = bot.trash ? (won ? TRASH_LINES.gameWin : TRASH_LINES.gameLose) : won ? GAME_WIN : GAME_LOSE;
@@ -259,6 +404,34 @@ export class BotChat {
     this.convoUntil = Date.now() + (at + 4000) * this.pace;
   }
 
+  /** A big moment: the lead team reacts, the partner backs them up, the other team answers (2-3 lines, a few
+   *  seconds apart). Each speaker talks in their own attitude. False when nobody can speak or chains are cooling down. */
+  private chain(moment: keyof typeof MOMENT_LINES, leadTeam: number, startMs = 800): boolean {
+    if (Date.now() - this.lastChain < CHAIN_GAP_MS * this.pace) return false;
+    const bots = this.host.bots();
+    const team = (t: number) => bots.filter((b) => b.seat % 2 === t);
+    const lead = team(leadTeam), other = team(1 - leadTeam);
+    const m = MOMENT_LINES[moment];
+    const steps: [Bot, string[]][] = [];
+    const first = lead[Math.floor(this.host.rng() * lead.length)];
+    if (first) {
+      steps.push([first, m.lead[attitudeOf(first)]]);
+      const mate = lead.find((b) => b.seat !== first.seat);
+      if (mate && (attitudeOf(first) !== 'friendly' || this.chance(0.5))) steps.push([mate, m.backup[attitudeOf(mate)]]);
+    }
+    const answer = other.find((b) => attitudeOf(b) !== 'friendly') ?? other[0];
+    if (answer) steps.push([answer, m.reply[attitudeOf(answer)]]);
+    if (steps.length < 2) return false; // one line is not a back-and-forth; the normal reactions cover it
+    this.lastChain = Date.now();
+    let at = startMs;
+    steps.forEach(([b, pool], i) => {
+      if (i) at += 2500 + this.rand(1500);
+      this.later(at, () => this.sayAs(b, pool, { H: this.firstHuman() }));
+    });
+    this.convoUntil = Date.now() + (at + 3000) * this.pace;
+    return true;
+  }
+
   private ready(): boolean { return this.on && this.host.humans().length > 0; }
   private cooling(): boolean { return Date.now() - this.lastSpoke < MIN_GAP_MS * this.pace || Date.now() < this.convoUntil; }
   private chance(p: number): boolean { return this.host.rng() < p; }
@@ -287,7 +460,8 @@ export class BotChat {
     // The seat may have changed hands since this was scheduled: only the same bot still in that seat speaks.
     if (!this.host.bots().some((b) => b.seat === bot.seat && b.name === bot.name)) return;
     const text = template.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '').replace(/\s+/g, ' ').trim().slice(0, CONVO_LIMIT);
-    if (!text) return;
+    if (!text || this.linesThisHand >= MAX_LINES_PER_HAND) return;
+    this.linesThisHand++;
     this.lastSpoke = Date.now();
     this.host.say(bot.seat, bot.name, text);
   }
