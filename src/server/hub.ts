@@ -284,20 +284,13 @@ export class Hub {
     }
   }
 
-  private dropTeamCodes(kind: 'tournamentTeam' | 'eventTeam', id: string): void {
-    for (const [c, v] of this.codes) if (v.kind === kind && v.id === id) this.codes.delete(c);
+  /** One code per team for the organizer to hand out (two people per code are partners). */
+  private makeTeamCodes(kind: 'tournamentTeam' | 'eventTeam', id: string, count: number): string[] {
+    return Array.from({ length: count }, () => { const c = this.newCode(); this.codes.set(c, { kind, id }); return c; });
   }
 
-  /** "Make a team" in the tournament or event the player is signed up for: a code their partner joins with. */
-  private makeTeam(p: Player): void {
-    const tour = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
-    const ev = p.eventId ? this.events.get(p.eventId) : undefined;
-    const x = tour ?? ev;
-    if (!x) return this.err(p, 'not_found', 'You are not in a tournament');
-    const code = x.pairing.codeOf(p.id) ?? this.newCode();
-    const r = x.makeTeam(p.id, code);
-    if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
-    this.codes.set(code, { kind: tour ? 'tournamentTeam' : 'eventTeam', id: x.id });
+  private dropTeamCodes(kind: 'tournamentTeam' | 'eventTeam', id: string): void {
+    for (const [c, v] of this.codes) if (v.kind === kind && v.id === id) this.codes.delete(c);
   }
 
   /** Organizer: swap / pair / unpair people before the start. */
@@ -350,7 +343,6 @@ export class Hub {
       case 'createEvent': return this.createEvent(p, msg.tables, msg.target ?? CONFIG.eventTarget, msg.teamMin4 !== false, msg.jokers === true);
       case 'startEvent': return this.startEvent(p);
       case 'leaveEvent': return this.leaveEvent(p);
-      case 'makeTeam': return this.makeTeam(p);
       case 'arrangeTeams': return this.arrangeTeams(p, msg.action, msg.a, msg.b);
       case 'joinTable': return this.joinTable(p, this.tables.get(msg.id), true);
       case 'watchTable': return this.watchTable(p, this.tables.get(msg.id), true);
@@ -780,7 +772,9 @@ export class Hub {
     const t = new Tournament({ id, code, size, organizerId: p.id, isPublic, teamMin4, jokers, rng: this.rng, host: this.tournamentHost() });
     this.tournaments.set(id, t);
     this.codes.set(code, { kind: 'tournament', id });
-    t.join(p.id, p.nick);
+    const teamCodes = this.makeTeamCodes('tournamentTeam', id, size);
+    t.pairing.setCodes(teamCodes);
+    t.join(p.id, p.nick, teamCodes[0]); // the organizer is in Team 1
     p.tournamentId = id;
     this.pushTournament(t);
     this.markLobbyDirty();
@@ -894,7 +888,9 @@ export class Hub {
     const ev = new TableEvent({ id, code, tables, target, teamMin4, jokers, organizerId: p.id, host: this.eventHost() });
     this.events.set(id, ev);
     this.codes.set(code, { kind: 'event', id });
-    ev.join(p.id, p.nick);
+    const teamCodes = this.makeTeamCodes('eventTeam', id, tables * 2);
+    ev.pairing.setCodes(teamCodes);
+    ev.join(p.id, p.nick, teamCodes[0]); // the organizer is in Team 1
     p.eventId = id;
     this.pushEvent(ev);
   }

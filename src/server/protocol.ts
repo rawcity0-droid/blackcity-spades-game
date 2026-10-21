@@ -34,7 +34,6 @@ export type ClientMsg =
   | { t: 'createEvent'; tables: number; target?: number; teamMin4?: boolean; jokers?: boolean }
   | { t: 'startEvent' }
   | { t: 'leaveEvent' }
-  | { t: 'makeTeam' }
   | { t: 'arrangeTeams'; action: 'swap' | 'pair' | 'unpair'; a: number; b?: number }
   | { t: 'goPremium' }
   | { t: 'restorePremium'; email: string }
@@ -87,7 +86,7 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       return { msg: { t: 'hello', nick: sanitizeNick(o.nick), token: o.token as string | undefined } };
     case 'ping': case 'quickPlay': case 'createFriend': case 'cancelMatch': case 'startTable': case 'ready': case 'rematch': case 'leaveTable': case 'endGame':
     case 'startTournament': case 'leaveTournament': case 'devToggleSubscription':
-    case 'addBots': case 'swapPartners': case 'startEvent': case 'leaveEvent': case 'goPremium': case 'makeTeam':
+    case 'addBots': case 'swapPartners': case 'startEvent': case 'leaveEvent': case 'goPremium':
       return { msg: { t: o.t } as ClientMsg };
     case 'createTable':
       if (typeof o.isPublic !== 'boolean') return bad('isPublic must be boolean');

@@ -413,3 +413,4 @@ table.sum th:first-child, table.sum td:first-child { text-align: left; font-weig
 @media (prefers-reduced-motion: no-preference) { .finding-ring { animation: spin 1s linear infinite; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .bidbtn:disabled { opacity: .3; cursor: not-allowed; }
+.team-code { font: 800 18px/1.2 var(--head); letter-spacing: .15em; color: var(--ink); text-align: right; }

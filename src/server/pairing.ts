@@ -1,143 +1,91 @@
-// Who partners with whom in a tournament or multi-table event, before it starts.
-// - A player can "Make a team": they get a team code, and whoever joins with it is locked in as their partner.
-// - Solo entrants are paired with each other in join order; a solo left over gets a computer partner at the start.
-// - The organizer can swap two people, pair two people, or split a pair; their edits override team codes.
-// teams() is the single source of truth: the registration screen shows it and the start builds from it.
+// Teams of a tournament or multi-table event, before it starts.
+// The organizer gets one team code per team (Team 1..N) to hand out; the two people who enter the same code
+// are partners (2 per code). The organizer sits in Team 1. Players who join with the plain tournament code are
+// solo: they fill open teams from the end, two solos together. A team of one gets a computer partner at the start.
+// The organizer can swap two people, make two people partners, or split a team.
 
 export interface Entrant { playerId: string; name: string; key: number } // key: public id for the organizer's taps
 type Result = { ok: true } | { ok: false; code: string; message: string };
 const fail = (code: string, message: string) => ({ ok: false as const, code, message });
 
 export class Pairing {
-  private partner = new Map<string, string>(); // locked pairs, stored both ways
-  private codes = new Map<string, string>();   // team code -> the player who made it
+  private slots: { code: string; members: string[] }[] = [];
+  private solo = new Set<string>(); // joined with the plain code (may be paired with another solo)
 
-  partnerOf(pid: string): string | undefined { return this.partner.get(pid); }
-  codeOf(pid: string): string | undefined { for (const [c, owner] of this.codes) if (owner === pid) return c; return undefined; }
-  hasCode(code: string): boolean { return this.codes.has(code); }
-  /** Spots held for partners who have a team code but have not joined yet. */
-  openCodes(): number { let n = 0; for (const owner of this.codes.values()) if (!this.partner.has(owner)) n++; return n; }
+  /** One code per team, Team 1 first. */
+  setCodes(codes: string[]): void { this.slots = codes.map((code) => ({ code, members: [] })); }
+  hasCode(code: string): boolean { return this.slots.some((s) => s.code === code); }
+  private slotOf(pid: string) { return this.slots.find((s) => s.members.includes(pid)); }
+  partnerOf(pid: string): string | undefined { return this.slotOf(pid)?.members.find((m) => m !== pid); }
 
-  /** The teams as they will be built: each is one or two player ids, in join order of their first member. */
-  teams(entrants: Entrant[]): string[][] {
-    const ids = new Set(entrants.map((e) => e.playerId));
-    const placed = new Set<string>();
-    const out: string[][] = [];
-    let openSolo: string[] | null = null;
-    for (const { playerId: pid } of entrants) {
-      if (placed.has(pid)) continue;
-      placed.add(pid);
-      const mate = this.partner.get(pid);
-      if (mate && ids.has(mate)) { placed.add(mate); out.push([pid, mate]); }
-      else if (this.codeOf(pid)) out.push([pid]); // waiting for the partner with their code
-      else if (openSolo) { openSolo.push(pid); openSolo = null; }
-      else { openSolo = [pid]; out.push(openSolo); }
+  /** Place a new entrant: into their team code's team, or (solo) into an open team. */
+  add(pid: string, code?: string): Result {
+    if (code) {
+      const s = this.slots.find((x) => x.code === code);
+      if (!s) return fail('not_found', 'That team code is not active');
+      if (s.members.length >= 2) return fail('full', 'That team is already full');
+      s.members.push(pid);
+      return { ok: true };
     }
-    return out;
-  }
-
-  lock(a: string, b: string): void {
-    this.unlock(a); this.unlock(b);
-    this.dropCode(a); this.dropCode(b);
-    this.partner.set(a, b); this.partner.set(b, a);
-  }
-
-  unlock(pid: string): void {
-    const mate = this.partner.get(pid);
-    if (mate) this.partner.delete(mate);
-    this.partner.delete(pid);
-  }
-
-  makeCode(pid: string, code: string): Result {
-    if (this.partner.has(pid)) return fail('not_allowed', 'You already have a partner');
-    this.dropCode(pid);
-    this.codes.set(code, pid);
+    const fromEnd = [...this.slots].reverse();
+    const s = fromEnd.find((x) => x.members.length === 1 && this.solo.has(x.members[0]))
+      ?? fromEnd.find((x) => x.members.length === 0)
+      ?? fromEnd.find((x) => x.members.length === 1);
+    if (!s) return fail('full', 'This tournament is full');
+    s.members.push(pid);
+    this.solo.add(pid);
     return { ok: true };
   }
 
-  /** Check a team code for someone about to join with it. */
-  checkCode(code: string): Result {
-    const owner = this.codes.get(code);
-    if (!owner) return fail('not_found', 'That team code is no longer active');
-    if (this.partner.has(owner)) return fail('full', 'That team is already full');
-    return { ok: true };
-  }
-
-  /** The joiner used the code: they become the code maker's partner. */
-  useCode(code: string, pid: string): void {
-    const owner = this.codes.get(code);
-    if (!owner) return;
-    this.lock(owner, pid);
-    this.codes.set(code, owner); // kept so a 3rd person with the code hears "already full"
-  }
-
-  /** A player left before the start: their partner becomes solo and their team code stops working. */
+  /** A player left before the start: their partner stays, now alone in the team. */
   remove(pid: string): void {
-    const mate = this.partner.get(pid);
-    this.unlock(pid);
-    this.dropCode(pid);
-    if (mate) this.dropCode(mate);
+    const s = this.slotOf(pid);
+    if (s) s.members = s.members.filter((m) => m !== pid);
+    this.solo.delete(pid);
   }
 
-  /** Organizer: a and b trade places. Both teams they end up in are then locked as shown. */
-  swap(entrants: Entrant[], a: string, b: string): Result {
-    const teams = this.teams(entrants);
-    const ta = teams.find((t) => t.includes(a));
-    const tb = teams.find((t) => t.includes(b));
-    if (!ta || !tb) return fail('not_found', 'Player not found');
-    if (ta === tb) return { ok: true };
-    ta[ta.indexOf(a)] = b;
-    tb[tb.indexOf(b)] = a;
-    for (const t of [ta, tb]) {
-      for (const pid of t) { this.unlock(pid); this.dropCode(pid); }
-      if (t.length === 2) this.lock(t[0], t[1]);
-    }
-    return { ok: true };
-  }
+  /** Teams with at least one person, in team order (one or two player ids each). */
+  teams(_entrants?: Entrant[]): string[][] { return this.slots.filter((s) => s.members.length).map((s) => [...s.members]); }
 
-  /** Organizer: make a and b partners (their old partners become solo). */
-  pair(a: string, b: string): Result {
-    if (a === b) return fail('not_allowed', 'Pick two different players');
-    this.lock(a, b);
-    return { ok: true };
-  }
-
-  /** Organizer: split a's team; both become solo. Returns the old partner. */
-  unpair(pid: string): string | undefined {
-    const mate = this.partner.get(pid);
-    this.remove(pid);
-    return mate;
-  }
-
-  /** An organizer edit by public entrant keys: 'swap' and 'pair' take two people, 'unpair' one.
-   *  After an unpair the old partner moves to the end of the join order so the two are not paired again at once. */
+  /** Organizer edit by public entrant keys: 'swap' and 'pair' take two people, 'unpair' (split) one. */
   arrange(entrants: Entrant[], action: 'swap' | 'pair' | 'unpair', a: number, b?: number): Result {
-    const ea = entrants.find((e) => e.key === a);
-    const eb = b === undefined ? undefined : entrants.find((e) => e.key === b);
-    if (!ea || (action !== 'unpair' && !eb)) return fail('not_found', 'Player not found');
-    if (action === 'swap') return this.swap(entrants, ea.playerId, eb!.playerId);
-    if (action === 'pair') return this.pair(ea.playerId, eb!.playerId);
-    const mate = this.unpair(ea.playerId);
-    const i = entrants.findIndex((e) => e.playerId === mate);
-    if (i >= 0) entrants.push(...entrants.splice(i, 1));
+    const pa = entrants.find((e) => e.key === a)?.playerId;
+    const pb = b === undefined ? undefined : entrants.find((e) => e.key === b)?.playerId;
+    if (!pa || (action !== 'unpair' && !pb)) return fail('not_found', 'Player not found');
+    const sa = this.slotOf(pa)!;
+    if (action === 'unpair') {
+      const mate = this.partnerOf(pa);
+      if (!mate) return { ok: true };
+      const empty = [...this.slots].reverse().find((x) => x.members.length === 0);
+      if (!empty) return fail('full', 'There is no empty team to move them to');
+      sa.members = [pa]; empty.members = [mate];
+      return { ok: true };
+    }
+    if (pa === pb) return fail('not_allowed', 'Pick two different players');
+    const sb = this.slotOf(pb!)!;
+    if (sa === sb) return { ok: true };
+    if (action === 'swap') {
+      sa.members[sa.members.indexOf(pa)] = pb!;
+      sb.members[sb.members.indexOf(pb!)] = pa;
+      return { ok: true };
+    }
+    // pair: b moves in with a; a's old partner (if any) takes b's place
+    const mate = this.partnerOf(pa);
+    sb.members = sb.members.filter((m) => m !== pb);
+    if (mate) sb.members.push(mate);
+    sa.members = [pa, pb!];
     return { ok: true };
   }
 
-  /** The teams for the registration screen. Team codes are shown only to the player who made them. */
+  /** The teams for the registration screen. Team codes and empty teams are shown only to the organizer. */
   view(entrants: Entrant[], organizerId: string, viewer: string) {
     const byId = new Map(entrants.map((e) => [e.playerId, e]));
-    return this.teams(entrants).map((t) => {
-      const owner = t.length === 1 && this.codeOf(t[0]) ? t[0] : null;
-      return {
-        members: t.map((pid) => ({ key: byId.get(pid)!.key, name: byId.get(pid)!.name, organizer: pid === organizerId, me: pid === viewer })),
-        locked: t.length === 2 && this.partner.has(t[0]),
-        waitingCode: owner === null ? null : owner === viewer ? this.codeOf(owner)! : '',
-      };
-    });
-  }
-
-  private dropCode(pid: string): void {
-    const c = this.codeOf(pid);
-    if (c) this.codes.delete(c);
+    const org = viewer === organizerId;
+    return this.slots.map((s, i) => ({
+      no: i + 1,
+      code: org ? s.code : null,
+      fill: s.members.length === 0 ? 'empty' : s.members.length === 1 ? '1 of 2' : 'full',
+      members: s.members.map((pid) => ({ key: byId.get(pid)!.key, name: byId.get(pid)!.name, organizer: pid === organizerId, me: pid === viewer })),
+    })).filter((t) => org || t.members.length > 0);
   }
 }

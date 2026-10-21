@@ -264,8 +264,10 @@ test('events: premium only to create, free to join with the code; entrants are s
     const tv = await org.waitFor((m) => m.t === 'table', 5000, true);
     assert.ok(tv.tournament); // event tables are tournament-style tables
     const bots = (r: any) => r.teams.flatMap((t: any) => t.players).filter((p: any) => p.bot).length;
-    assert.deepEqual(running.results.map(bots), [0, 3]);
-    assert.equal(running.results[0].teams[0].name, 'Org & J0'); // consecutive joiners are partners
+    // the organizer sits in Team 1 waiting for a partner with its team code; solos pair up in join order
+    assert.deepEqual(running.results.map(bots), [1, 2]);
+    const teamNames = running.results.flatMap((r: any) => r.teams.map((t: any) => t.name));
+    assert.ok(teamNames.includes('J0 & J1') && teamNames.includes('J2 & J3'));
 
     const done = await org.waitFor((m) => m.t === 'event' && m.state === 'finished', 120000);
     assert.equal(done.winners.length, 2);

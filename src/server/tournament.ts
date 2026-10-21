@@ -92,6 +92,7 @@ export class Tournament {
     this.isPublic = init.isPublic;
     this.host = init.host;
     this.rng = init.rng ?? secureRng;
+    this.pairing.setCodes(Array.from({ length: this.size }, () => '')); // the hub hands out the real team codes
   }
 
   get totalRounds(): number { return Math.log2(this.size); }
@@ -111,27 +112,16 @@ export class Tournament {
     return [...ids];
   }
 
-  /** Join; with a team code the player is locked in as that code maker's partner. */
+  /** Join; with one of the organizer's team codes the player joins that team, otherwise they fill an open team. */
   join(pid: string, name: string, teamCode?: string): Result {
     if (this.state !== 'registering') return fail('wrong_state', 'Registration is closed');
     if (this.hasEntrant(pid)) return { ok: true };
-    if (teamCode) { const c = this.pairing.checkCode(teamCode); if (!c.ok) return c; }
-    const held = this.pairing.openCodes() - (teamCode ? 1 : 0); // spots held for partners with a team code
-    if (this.entrants.length + held >= this.maxEntrants) return fail('full', 'This tournament is full');
+    if (this.entrants.length >= this.maxEntrants) return fail('full', 'This tournament is full');
+    const r = this.pairing.add(pid, teamCode);
+    if (!r.ok) return r;
     this.entrants.push({ playerId: pid, name, key: this.nextKey++ });
-    if (teamCode) this.pairing.useCode(teamCode, pid);
     this.host.changed(this);
     return { ok: true };
-  }
-
-  /** "Make a team": hold a spot for a partner, who joins with this code. */
-  makeTeam(pid: string, code: string): Result {
-    if (this.state !== 'registering') return fail('wrong_state', 'Registration is closed');
-    if (!this.hasEntrant(pid)) return fail('not_found', 'Join the tournament first');
-    if (!this.pairing.codeOf(pid) && this.entrants.length + this.pairing.openCodes() >= this.maxEntrants) return fail('full', 'This tournament is full');
-    const r = this.pairing.makeCode(pid, code);
-    if (r.ok) this.host.changed(this);
-    return r;
   }
 
   /** Organizer only, before the start: swap two people, pair two people, or split a pair. */
