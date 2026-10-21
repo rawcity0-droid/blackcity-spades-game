@@ -714,7 +714,7 @@ function openEventModal(edit) {
   closeModal('play');
   const cfg = state.config || {};
   const opts = cfg.eventTableOptions || [1, 2, 3, 4, 5, 6, 7, 8];
-  const f = edit ? { tables: edit.tables, target: edit.target, teamMin4: !!edit.teamMin, jokers: !!edit.jokers }
+  const f = edit ? { tables: edit.tables, target: edit.target, teamMin4: !!edit.teamMin, jokers: !!edit.jokers, setsOut: !!edit.setsOut }
     : { tables: 2, target: cfg.eventTarget || 250, teamMin4: true, jokers: false };
   const { el, body } = modalCard({ title: edit ? 'Edit settings' : 'Create Tournament', id: 'event', cls: 'small' });
   body.append(
@@ -724,10 +724,19 @@ function openEventModal(edit) {
     h('div', { class: 'field-label', text: 'Each game goes to' }),
     seg((cfg.tableTargets || [250, 500]).map((n) => [n, String(n)]), f.target, (v) => { f.target = v; }),
     ...bidRuleField(f),
+    ...setRuleField(f),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('event')),
-      edit ? btn('gold', 'Save', () => { send({ t: 'editEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers }); closeModal('event'); })
-        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers }); })));
+      edit ? btn('gold', 'Save', () => { send({ t: 'editEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut }); closeModal('event'); })
+        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut }); })));
   openModal('event', el);
+}
+
+/** Premium host's set rule: Regular (play to the target) or 2 sets and out (a team set twice in a game loses). */
+function setRuleField(f) {
+  return [
+    h('div', { class: 'field-label', text: 'Set rule' }),
+    seg([[false, 'Regular'], [true, '2 sets and out']], !!f.setsOut, (v) => { f.setsOut = v; }),
+  ];
 }
 
 /** Premium host's bidding rule: Team min 4 (default; team contract is at least a board of 4) or regular spades bidding. */
@@ -746,7 +755,7 @@ const nextBidRule = (br) => (br && br.jokers ? { teamMin4: true, jokers: false }
 function openBracketModal(edit) {
   closeModal('play');
   const cfg = state.config || {};
-  const f = edit ? { size: edit.size, teamMin4: !!edit.teamMin, jokers: !!edit.jokers, isPublic: !!edit.isPublic }
+  const f = edit ? { size: edit.size, teamMin4: !!edit.teamMin, jokers: !!edit.jokers, isPublic: !!edit.isPublic, setsOut: !!edit.setsOut }
     : { size: (cfg.tournamentSizes || [4, 8, 16])[0], teamMin4: true, jokers: false, isPublic: false };
   const { el, body } = modalCard({ title: edit ? 'Edit settings' : 'Create Bracket', id: 'bracket', cls: 'small' });
   body.append(
@@ -754,11 +763,12 @@ function openBracketModal(edit) {
     h('div', { class: 'field-label', text: 'Teams' }),
     seg((cfg.tournamentSizes || [4, 8, 16]).map((n) => [n, String(n)]), f.size, (v) => { f.size = v; }),
     ...bidRuleField(f),
+    ...setRuleField(f),
     h('div', { class: 'field-label', text: 'Who can find it' }),
     seg([[false, 'Private (code only)'], [true, 'Public (listed)']], f.isPublic, (v) => { f.isPublic = v; }),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('bracket')),
-      edit ? btn('gold', 'Save', () => { send({ t: 'editTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers }); closeModal('bracket'); })
-        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers }); })));
+      edit ? btn('gold', 'Save', () => { send({ t: 'editTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut }); closeModal('bracket'); })
+        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut }); })));
   openModal('bracket', el);
 }
 
@@ -1010,11 +1020,11 @@ function renderTop(t) {
     const stats = t ? teamStats(t, team) : '';
     return h('div', { class: 'sbox', 'data-team': k },
       h('div', { class: 'sbox-main' }, h('b', { class: 'num', text: String(t ? t.scores[team] : 0) }), h('span', { class: 'lab', text: labels[k] })),
-      h('div', { class: 'sbox-bags', text: noBags ? 'no sandbags' : `${bags} bags` }),
+      h('div', { class: 'sbox-bags', text: (noBags ? 'no sandbags' : `${bags} bags`) + (t && t.rules && t.rules.setsOut ? ` · Sets ${(t.sets || [0, 0])[team]}/2` : '') }),
       stats ? h('div', { class: 'sbox-stats', text: stats }) : null);
   }));
   const mineTeam = t && t.mySeat >= 0 ? t.mySeat % 2 : 0;
-  const label = t ? (t.tournament ? t.tournament.label + (t.series ? ` · ${t.series.wins[mineTeam]}–${t.series.wins[1 - mineTeam]}` : '') : `First to ${t.target}`) + (t.bidRules && t.bidRules.jokers ? ' · Jokers' : '') : 'First to 500';
+  const label = t ? (t.tournament ? t.tournament.label + (t.series ? ` · ${t.series.wins[mineTeam]}–${t.series.wins[1 - mineTeam]}` : '') : `First to ${t.target}`) + (t.bidRules && t.bidRules.jokers ? ' · Jokers' : '') + (t.rules && t.rules.setsOut ? ' · 2 sets out' : '') : 'First to 500';
   $('target-label').textContent = label;
   const acts = $('top-actions');
   if (!acts.firstChild) {
@@ -1284,6 +1294,7 @@ function hostLobby(t) {
       chip(`First to ${r.target}`, () => send({ t: 'setRules', target: other })),
       chip(`Break rule ${r.breakRule ? 'on' : 'off'}`, () => send({ t: 'setRules', breakRule: !r.breakRule })),
       r.jokers ? h('span', { class: 'rchip', text: 'No sandbags' }) : chip(`Sandbags ${r.sandbags ? 'on' : 'off'}`, () => send({ t: 'setRules', sandbags: !r.sandbags })),
+      ...(t.quick || t.practice ? [] : [chip(r.setsOut ? 'Set rule: 2 sets and out' : 'Set rule: Regular', () => send({ t: 'setRules', setsOut: !r.setsOut }))]),
       ...(t.quick || t.practice ? [] : [chip(bidRuleLabel(t.bidRules && t.bidRules.teamMin, t.bidRules && t.bidRules.jokers), () => send({ t: 'setRules', ...nextBidRule(t.bidRules) }))]),
       t.quick || t.practice ? h('span', { class: 'rchip', text: t.quick ? 'Quick play' : 'Practice table' })
         : chip(t.isPublic ? 'Public table' : 'Private · Premium host', () => send({ t: 'setRules', isPublic: !t.isPublic }))),
@@ -1353,6 +1364,7 @@ function gameOver(t) {
   const { el, body } = modalCard({ title, id: 'over', cls: 'small', onClose: midSeries ? () => closeModal('over') : () => send({ t: 'leaveTable' }) });
   body.append(
     t.forfeit ? h('p', { class: 'lead', text: 'The other team left the match, so this team advances.' }) : null,
+    t.endReason === 'sets' ? h('p', { class: 'lead center-text', text: 'Set twice — game over. ' + (mine === null ? `${teamLabel(1 - w)} were set twice.` : 1 - w === mine ? 'Your team was set twice.' : 'The other team was set twice.') }) : null,
     h('table', { class: 'sum' }, h('tbody', {}, order.map((team) => h('tr', {}, h('td', { text: teamLabel(team) }), h('td', { text: String(t.scores[team]) }))))),
     t.tournament && S ? h('p', { class: 'lead center-text series-score', text: seriesText(S, order) }) : null,
     midSeries ? h('p', { class: 'tiny center-text', text: `Game ${S.game} starts in a moment at this table…` })
@@ -1425,7 +1437,7 @@ function renderBracketSheet() {
   if (!T) return;
   const sh = sheetShell(`Bracket · ${T.size} teams`, T.state, stateBadge(T.state));
   sh.append(codeBox(T.code, 'TOURNAMENT CODE'),
-    h('div', { class: 'muted', text: `Free to join · matches to ${T.rounds.length ? T.rounds[0].target : state.config.tournamentTargetEarly}, final to ${state.config.tournamentTargetFinal} · ${bidRuleLabel(T.teamMin, T.jokers)}` }));
+    h('div', { class: 'muted', text: `Free to join · matches to ${T.rounds.length ? T.rounds[0].target : state.config.tournamentTargetEarly}, final to ${state.config.tournamentTargetFinal} · ${bidRuleLabel(T.teamMin, T.jokers)}${T.setsOut ? ' · 2 sets and out' : ''}` }));
   if (T.champion) {
     sh.append(h('div', { class: 'champ' }, h('div', { class: 'muted', text: 'Champion' }), h('h3', { text: `🏆 ${T.champion.name}` }),
       T.runnerUp ? h('div', { text: `Runner-up: ${T.runnerUp.name}` }) : null));
@@ -1491,7 +1503,7 @@ function renderEventSheet() {
   if (!E) return;
   const sh = sheetShell(`Tournament · ${E.tables} ${E.tables === 1 ? 'table' : 'tables'}`, E.state, stateBadge(E.state));
   sh.append(codeBox(E.code, 'TOURNAMENT CODE'),
-    h('div', { class: 'muted', text: `Free to join · each table plays one game to ${E.target} · ${bidRuleLabel(E.teamMin, E.jokers)} · up to ${E.capacity} players` }));
+    h('div', { class: 'muted', text: `Free to join · each table plays one game to ${E.target} · ${bidRuleLabel(E.teamMin, E.jokers)}${E.setsOut ? ' · 2 sets and out' : ''} · up to ${E.capacity} players` }));
   if (E.state === 'registering') {
     sh.append(h('div', { class: 'panel' },
       h('h3', { text: `Players ${E.entrants.length}/${E.capacity}` }),

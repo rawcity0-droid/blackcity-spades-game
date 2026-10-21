@@ -50,6 +50,9 @@ export interface GameState {
   sandbags: boolean;    // true: bags are counted and penalised (default). false: no bag points, no counting, no penalty.
   jokers: boolean;      // Jokers mode: 2♦/2♥ out, Big and Little Joker in as top trumps (see cards.ts); no Nil, no bags
   teamMin: number;      // the two partners' bids must add up to at least this (0 = no team minimum)
+  setsOut: boolean;     // "2 sets and out": a team set (books contract failed) for the 2nd time in this game loses at once
+  sets: [number, number]; // times each team was set this game
+  endReason: 'target' | 'sets' | null;
   rng: Rng;
   phase: Phase;
   handNo: number;
@@ -69,7 +72,10 @@ export interface GameState {
   winner: Team | null;
 }
 
-export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean; teamMin?: number; jokers?: boolean }
+export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean; teamMin?: number; jokers?: boolean; setsOut?: boolean }
+
+/** Sets that end the game under "2 sets and out". */
+export const SETS_OUT = 2;
 
 export function createGame(opts: GameOptions = {}): GameState {
   const g: GameState = {
@@ -78,6 +84,9 @@ export function createGame(opts: GameOptions = {}): GameState {
     sandbags: opts.jokers ? false : opts.sandbags ?? true,
     jokers: !!opts.jokers,
     teamMin: opts.jokers ? Math.max(opts.teamMin ?? 0, CONFIG.rules.premiumTeamMin) : opts.teamMin ?? 0,
+    setsOut: !!opts.setsOut,
+    sets: [0, 0],
+    endReason: null,
     rng: opts.rng ?? secureRng,
     phase: 'bidding',
     handNo: 0,
@@ -279,6 +288,16 @@ export function gameWinner(scores: [number, number], target: number): Team | nul
   return scores[0] === scores[1] ? null : scores[0] > scores[1] ? 0 : 1;
 }
 
+/** "2 sets and out": the other team wins when exactly one team has been set twice; if both reach it on the
+ *  same hand the higher score wins (an exact tie plays on, decided by the score rules). */
+export function setsWinner(g: Pick<GameState, 'setsOut' | 'sets' | 'scores'>): Team | null {
+  if (!g.setsOut) return null;
+  const out = g.sets.map((n) => n >= SETS_OUT);
+  if (out[0] !== out[1]) return out[0] ? 1 : 0;
+  if (out[0] && out[1] && g.scores[0] !== g.scores[1]) return g.scores[0] > g.scores[1] ? 0 : 1;
+  return null;
+}
+
 function finishHand(g: GameState): void {
   const bids = g.bids.map((b) => b ?? 0);
   const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0], g.sandbags, !g.teamMin, g.teamMin);
@@ -293,6 +312,10 @@ function finishHand(g: GameState): void {
     scores: [g.scores[0], g.scores[1]],
     bags: [g.bags[0], g.bags[1]],
   };
-  g.winner = gameWinner(g.scores, g.target);
+  // A failed Nil alone is not a set: only the team's books contract (made === false) counts
+  if (t0.result.made === false) g.sets[0] += 1;
+  if (t1.result.made === false) g.sets[1] += 1;
+  g.winner = setsWinner(g) ?? gameWinner(g.scores, g.target);
+  g.endReason = g.winner === null ? null : setsWinner(g) !== null ? 'sets' : 'target';
   g.phase = g.winner === null ? 'handOver' : 'gameOver';
 }

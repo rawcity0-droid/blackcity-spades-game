@@ -51,6 +51,8 @@ export interface TournamentInit {
   teamMin4?: boolean;
   /** Jokers mode for every table this opens (implies Team min 4, no bags). */
   jokers?: boolean;
+  /** "2 sets and out" at every table this opens (each game of a series counts fresh). */
+  setsOut?: boolean;
   isPublic: boolean;
   host: TournamentHost;
   rng?: Rng;
@@ -68,6 +70,7 @@ export class Tournament {
   readonly organizerId: string;
   teamMin4: boolean;
   jokers: boolean;
+  setsOut: boolean;
   isPublic: boolean;
   readonly createdAt = Date.now();
   state: TState = 'registering';
@@ -88,6 +91,7 @@ export class Tournament {
     this.size = init.size;
     this.organizerId = init.organizerId;
     this.jokers = init.jokers === true;
+    this.setsOut = init.setsOut === true;
     this.teamMin4 = this.jokers || init.teamMin4 !== false;
     this.isPublic = init.isPublic;
     this.host = init.host;
@@ -126,7 +130,7 @@ export class Tournament {
 
   /** Organizer, before the start: change the bracket size, bidding rule or public / private. Joined players are kept;
    *  people in teams that no longer exist move into open teams. Refused if more people joined than the new size fits. */
-  edit(pid: string, patch: { size?: number; isPublic?: boolean; teamMin4?: boolean; jokers?: boolean }, newCodes: (n: number) => string[]): Result<{ removedCodes: string[]; addedCodes: string[] }> {
+  edit(pid: string, patch: { size?: number; isPublic?: boolean; teamMin4?: boolean; jokers?: boolean; setsOut?: boolean }, newCodes: (n: number) => string[]): Result<{ removedCodes: string[]; addedCodes: string[] }> {
     if (pid !== this.organizerId) return fail('not_allowed', 'Only the organizer can change the settings');
     if (this.state !== 'registering') return fail('wrong_state', 'Settings can’t be changed after the start. You can end the tournament from the menu.');
     let removedCodes: string[] = [];
@@ -140,6 +144,7 @@ export class Tournament {
       this.size = patch.size;
     }
     if (patch.isPublic !== undefined) this.isPublic = patch.isPublic;
+    if (patch.setsOut !== undefined) this.setsOut = patch.setsOut;
     if (patch.teamMin4 !== undefined || patch.jokers !== undefined) {
       this.jokers = patch.jokers === true;
       this.teamMin4 = this.jokers || patch.teamMin4 !== false;
@@ -318,6 +323,7 @@ export class Tournament {
       isPublic: this.isPublic,
       teamMin: this.teamMin4 ? CONFIG.rules.premiumTeamMin : 0,
       jokers: this.jokers,
+      setsOut: this.setsOut,
       isOrganizer: pid === this.organizerId,
       joined: this.hasPlayer(pid),
       capacity: this.maxEntrants,

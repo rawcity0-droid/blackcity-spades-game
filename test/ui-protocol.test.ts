@@ -55,7 +55,7 @@ test('table rules: host sets target / break rule / sandbags before start; others
     await premium(host);
     host.send({ t: 'createTable', isPublic: false, target: 500, breakRule: false, sandbags: true });
     const v0 = await host.waitFor((m) => m.t === 'table');
-    assert.deepEqual(v0.rules, { target: 500, breakRule: false, sandbags: true, jokers: false });
+    assert.deepEqual(v0.rules, { target: 500, breakRule: false, sandbags: true, jokers: false, setsOut: false });
     const guest = (await connect(srv.port, 'Guest')).c;
     guest.send({ t: 'joinCode', code: v0.code });
     await guest.waitFor((m) => m.t === 'table');
@@ -65,7 +65,7 @@ test('table rules: host sets target / break rule / sandbags before start; others
 
     host.send({ t: 'setRules', target: 250, breakRule: true, sandbags: false });
     const v1 = await host.waitFor((m) => m.t === 'table' && m.rules.target === 250);
-    assert.deepEqual(v1.rules, { target: 250, breakRule: true, sandbags: false, jokers: false });
+    assert.deepEqual(v1.rules, { target: 250, breakRule: true, sandbags: false, jokers: false, setsOut: false });
     assert.deepEqual((await guest.waitFor((m) => m.t === 'table' && m.rules.target === 250)).rules, v1.rules);
 
     host.send({ t: 'setRules', target: 300 });

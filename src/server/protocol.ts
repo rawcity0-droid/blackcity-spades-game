@@ -8,8 +8,8 @@ export type ClientMsg =
   | { t: 'hello'; nick: string; token?: string }
   | { t: 'ping' }
   | { t: 'setNick'; nick: string }
-  | { t: 'createTable'; isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; practice?: boolean; teamMin4?: boolean; jokers?: boolean }
-  | { t: 'setRules'; target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean; jokers?: boolean; isPublic?: boolean }
+  | { t: 'createTable'; isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; practice?: boolean; teamMin4?: boolean; jokers?: boolean; setsOut?: boolean }
+  | { t: 'setRules'; target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean; jokers?: boolean; isPublic?: boolean; setsOut?: boolean }
   | { t: 'addBots' }
   | { t: 'swapPartners' }
   | { t: 'joinTable'; id: string }
@@ -26,16 +26,16 @@ export type ClientMsg =
   | { t: 'rematch' }
   | { t: 'leaveTable' }
   | { t: 'endGame' }
-  | { t: 'createTournament'; size: number; isPublic: boolean; teamMin4?: boolean; jokers?: boolean }
+  | { t: 'createTournament'; size: number; isPublic: boolean; teamMin4?: boolean; jokers?: boolean; setsOut?: boolean }
   | { t: 'joinTournament'; id: string }
   | { t: 'watchTournament'; id: string }
   | { t: 'startTournament' }
   | { t: 'leaveTournament' }
-  | { t: 'createEvent'; tables: number; target?: number; teamMin4?: boolean; jokers?: boolean }
+  | { t: 'createEvent'; tables: number; target?: number; teamMin4?: boolean; jokers?: boolean; setsOut?: boolean }
   | { t: 'startEvent' }
   | { t: 'leaveEvent' }
-  | { t: 'editTournament'; size?: number; isPublic?: boolean; teamMin4?: boolean; jokers?: boolean }
-  | { t: 'editEvent'; tables?: number; target?: number; teamMin4?: boolean; jokers?: boolean }
+  | { t: 'editTournament'; size?: number; isPublic?: boolean; teamMin4?: boolean; jokers?: boolean; setsOut?: boolean }
+  | { t: 'editEvent'; tables?: number; target?: number; teamMin4?: boolean; jokers?: boolean; setsOut?: boolean }
   | { t: 'arrangeTeams'; action: 'swap' | 'pair' | 'unpair'; a: number; b?: number }
   | { t: 'goPremium' }
   | { t: 'restorePremium'; email: string }
@@ -81,6 +81,8 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return { error: 'Message must be an object' };
   const o = v as Record<string, unknown>;
   const bad = (m: string) => ({ error: m });
+  if (o.setsOut !== undefined && typeof o.setsOut !== 'boolean') return bad('setsOut must be boolean');
+  const setsOut = o.setsOut as boolean | undefined;
   switch (o.t) {
     case 'hello':
       if (o.token !== undefined && !(str(o.token) && TOKEN_RE.test(o.token))) return bad('Bad token');
@@ -99,7 +101,7 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (o.teamMin4 !== undefined && typeof o.teamMin4 !== 'boolean') return bad('teamMin4 must be boolean');
       if (o.jokers !== undefined && typeof o.jokers !== 'boolean') return bad('jokers must be boolean');
       return { msg: { t: 'createTable', isPublic: o.isPublic, target: o.target as number,
-        breakRule: o.breakRule as boolean | undefined, sandbags: o.sandbags as boolean | undefined, practice: o.practice as boolean | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined } };
+        breakRule: o.breakRule as boolean | undefined, sandbags: o.sandbags as boolean | undefined, practice: o.practice as boolean | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined, setsOut } };
     case 'setNick':
       return { msg: { t: 'setNick', nick: sanitizeNick(o.nick) } };
     case 'setRules':
@@ -110,13 +112,13 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (o.jokers !== undefined && typeof o.jokers !== 'boolean') return bad('jokers must be boolean');
       if (o.isPublic !== undefined && typeof o.isPublic !== 'boolean') return bad('isPublic must be boolean');
       return { msg: { t: 'setRules', target: o.target as number | undefined,
-        breakRule: o.breakRule as boolean | undefined, sandbags: o.sandbags as boolean | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined, isPublic: o.isPublic as boolean | undefined } };
+        breakRule: o.breakRule as boolean | undefined, sandbags: o.sandbags as boolean | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined, isPublic: o.isPublic as boolean | undefined, setsOut } };
     case 'createEvent':
       if (!(CONFIG.eventTableOptions as readonly number[]).includes(o.tables as number)) return bad('Choose 1 to 8 tables');
       if (o.target !== undefined && !(CONFIG.tableTargets as readonly number[]).includes(o.target as number)) return bad('Bad target score');
       if (o.teamMin4 !== undefined && typeof o.teamMin4 !== 'boolean') return bad('teamMin4 must be boolean');
       if (o.jokers !== undefined && typeof o.jokers !== 'boolean') return bad('jokers must be boolean');
-      return { msg: { t: 'createEvent', tables: o.tables as number, target: o.target as number | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined } };
+      return { msg: { t: 'createEvent', tables: o.tables as number, target: o.target as number | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined, setsOut } };
     case 'editTournament': case 'editEvent': {
       // sizes / tables / targets are checked against the config by the tournament or event itself
       const num = (v: unknown) => v === undefined || Number.isInteger(v);
@@ -124,8 +126,8 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (!num(o.size) || !num(o.tables) || !num(o.target)) return bad('Bad number');
       if (!bool(o.isPublic) || !bool(o.teamMin4) || !bool(o.jokers)) return bad('Bad setting');
       return { msg: o.t === 'editTournament'
-        ? { t: 'editTournament', size: o.size as number | undefined, isPublic: o.isPublic as boolean | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined }
-        : { t: 'editEvent', tables: o.tables as number | undefined, target: o.target as number | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined } };
+        ? { t: 'editTournament', size: o.size as number | undefined, isPublic: o.isPublic as boolean | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined, setsOut }
+        : { t: 'editEvent', tables: o.tables as number | undefined, target: o.target as number | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined, setsOut } };
     }
     case 'arrangeTeams': {
       if (o.action !== 'swap' && o.action !== 'pair' && o.action !== 'unpair') return bad('Bad action');
@@ -167,7 +169,7 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (typeof o.isPublic !== 'boolean') return bad('isPublic must be boolean');
       if (o.teamMin4 !== undefined && typeof o.teamMin4 !== 'boolean') return bad('teamMin4 must be boolean');
       if (o.jokers !== undefined && typeof o.jokers !== 'boolean') return bad('jokers must be boolean');
-      return { msg: { t: 'createTournament', size: o.size as number, isPublic: o.isPublic, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined } };
+      return { msg: { t: 'createTournament', size: o.size as number, isPublic: o.isPublic, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined, setsOut } };
     default:
       return bad('Unknown message type');
   }
