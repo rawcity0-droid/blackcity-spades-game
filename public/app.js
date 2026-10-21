@@ -1348,6 +1348,51 @@ function sheetShell(title, badgeText, badgeCls) {
     h('div', { class: 'sheet-head' }, h('h2', { text: title }), h('span', { class: `badge ${badgeCls}`, text: badgeText })));
 }
 
+/** Registration teams (tournament or event). Everyone sees them live; a player can "Make a team" for a code;
+ *  the organizer taps one player, then another, to swap them or make them partners, or splits a team. */
+const pick = { key: null, mode: 'swap' };
+function teamsPanel(X) {
+  const out = [];
+  const teams = X.teams || [];
+  const mine = teams.find((t) => t.members.some((m) => m.me));
+  const org = X.isOrganizer;
+  if (pick.key !== null && !teams.some((t) => t.members.some((m) => m.key === pick.key))) pick.key = null;
+  const tapMember = (m) => {
+    if (pick.key === null) pick.key = m.key;
+    else if (pick.key === m.key) pick.key = null;
+    else { send({ t: 'arrangeTeams', action: pick.mode, a: pick.key, b: m.key }); pick.key = null; }
+    render();
+  };
+  teams.forEach((t, i) => {
+    const names = t.members.map((m) => {
+      const label = m.name + (m.organizer ? ' (Organizer)' : '') + (m.me ? ' · you' : '');
+      return org
+        ? h('button', { class: 'btn ' + (pick.key === m.key ? 'gold' : 'soft'), type: 'button', text: label, onclick: () => tapMember(m) })
+        : h('b', { text: label });
+    });
+    const note = t.members.length === 2 ? (t.locked ? 'Partners' : 'Paired by join order')
+      : t.waitingCode !== null ? 'Waiting for partner with team code' : 'Partner joins at the start';
+    out.push(h('div', { class: 'list-item' },
+      h('div', { class: 'info' }, h('div', { class: 'muted', text: `Team ${i + 1} · ${note}` }), h('div', { class: 'btn-row' }, ...names)),
+      org && t.members.length === 2 ? btn('outline', 'Split', () => { pick.key = null; send({ t: 'arrangeTeams', action: 'unpair', a: t.members[0].key }); }) : null));
+  });
+  if (org) {
+    out.push(h('p', { class: 'tiny', text: pick.key === null ? 'Organizer: tap a player, then tap another player to change the teams.'
+      : pick.mode === 'swap' ? 'Now tap the player to swap places with.' : 'Now tap the player to be their partner.' }),
+      h('div', { class: 'btn-row' },
+        btn(pick.mode === 'swap' ? 'gold' : 'outline', 'Swap places', () => { pick.mode = 'swap'; render(); }),
+        btn(pick.mode === 'pair' ? 'gold' : 'outline', 'Make partners', () => { pick.mode = 'pair'; render(); })));
+  }
+  if (mine && mine.waitingCode) {
+    out.push(codeBox(mine.waitingCode, 'YOUR TEAM CODE'),
+      h('p', { class: 'tiny', text: 'Give this code to your partner. They tap Join Tournament and enter it to join as your partner.' }));
+  } else if (mine && !(mine.members.length === 2 && mine.locked)) {
+    out.push(btn('soft wide', 'Make a team', () => send({ t: 'makeTeam' })),
+      h('p', { class: 'tiny', text: 'Get a team code for the friend you want as your partner.' }));
+  }
+  return out;
+}
+
 function codeBox(code, label) {
   return h('div', { class: 'codebox small' }, h('div', { class: 'cb-label', text: label }), h('div', { class: 'cb-code', text: code }),
     h('button', { class: 'ulink', type: 'button', text: 'Copy code', onclick: () => { (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(() => toast('Code copied'), () => toast(code)); } }));
@@ -1370,8 +1415,8 @@ function renderBracketSheet() {
   if (T.state === 'registering') {
     sh.append(h('div', { class: 'panel' },
       h('h3', { text: `Players ${T.entrants.length}/${T.capacity}` }),
-      ...T.entrants.map((e) => h('div', { class: 'list-item' }, h('span', { text: e.name }), e.organizer ? h('span', { class: 'badge gold', text: 'Organizer' }) : null)),
-      h('p', { class: 'muted', text: 'Solo players are paired up when the organizer starts. A leftover player gets a partner, and empty teams are filled automatically.' }),
+      ...teamsPanel(T),
+      h('p', { class: 'muted', text: 'Solo players are paired in the order they joined. A player without a partner gets one at the start, and empty teams are filled automatically.' }),
       T.isOrganizer ? btn('gold wide', 'Start tournament', () => send({ t: 'startTournament' })) : h('p', { text: 'Waiting for the organizer to start…' })));
   } else {
     const br = h('div', { class: 'bracket' });
@@ -1431,8 +1476,8 @@ function renderEventSheet() {
   if (E.state === 'registering') {
     sh.append(h('div', { class: 'panel' },
       h('h3', { text: `Players ${E.entrants.length}/${E.capacity}` }),
-      ...E.entrants.map((e) => h('div', { class: 'list-item' }, h('span', { text: e.name }), e.organizer ? h('span', { class: 'badge gold', text: 'Organizer' }) : null)),
-      h('p', { class: 'muted', text: 'When the organizer starts, players are seated four to a table in the order they joined (partners are neighbours in the list). Open seats are filled automatically, and only the tables needed are opened.' }),
+      ...teamsPanel(E),
+      h('p', { class: 'muted', text: 'When the organizer starts, the teams above sit two teams to a table, partners across from each other. Open seats are filled automatically, and only the tables needed are opened.' }),
       E.isOrganizer ? btn('gold wide', 'Start tournament', () => send({ t: 'startEvent' })) : h('p', { text: 'Waiting for the organizer to start…' })));
   } else {
     if (E.state === 'finished') {

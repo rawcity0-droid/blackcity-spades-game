@@ -6,6 +6,7 @@ import { CONFIG, tournamentTarget, tournamentWinsNeeded } from '../config.js';
 import { Rng, secureRng, shuffle } from '../engine/cards.js';
 import { simulateGame } from '../engine/sim.js';
 import { Persona, pickPersona } from './personas.js';
+import { Entrant, Pairing } from './pairing.js';
 
 export interface Slot { playerId: string | null; name: string; persona?: Persona } // playerId null = bot (with its persona: name, picture, style, skill)
 export interface TeamRef { id: number; name: string; slots: [Slot, Slot] }
@@ -71,7 +72,9 @@ export class Tournament {
   readonly createdAt = Date.now();
   state: TState = 'registering';
   finishedAt: number | null = null;
-  entrants: { playerId: string; name: string }[] = [];
+  entrants: Entrant[] = [];
+  readonly pairing = new Pairing();
+  private nextKey = 1;
   viewers = new Set<string>();
   rounds: Match[][] = [];
   champion: TeamRef | null = null;
@@ -108,13 +111,36 @@ export class Tournament {
     return [...ids];
   }
 
-  join(pid: string, name: string): Result {
+  /** Join; with a team code the player is locked in as that code maker's partner. */
+  join(pid: string, name: string, teamCode?: string): Result {
     if (this.state !== 'registering') return fail('wrong_state', 'Registration is closed');
     if (this.hasEntrant(pid)) return { ok: true };
-    if (this.entrants.length >= this.maxEntrants) return fail('full', 'This tournament is full');
-    this.entrants.push({ playerId: pid, name });
+    if (teamCode) { const c = this.pairing.checkCode(teamCode); if (!c.ok) return c; }
+    const held = this.pairing.openCodes() - (teamCode ? 1 : 0); // spots held for partners with a team code
+    if (this.entrants.length + held >= this.maxEntrants) return fail('full', 'This tournament is full');
+    this.entrants.push({ playerId: pid, name, key: this.nextKey++ });
+    if (teamCode) this.pairing.useCode(teamCode, pid);
     this.host.changed(this);
     return { ok: true };
+  }
+
+  /** "Make a team": hold a spot for a partner, who joins with this code. */
+  makeTeam(pid: string, code: string): Result {
+    if (this.state !== 'registering') return fail('wrong_state', 'Registration is closed');
+    if (!this.hasEntrant(pid)) return fail('not_found', 'Join the tournament first');
+    if (!this.pairing.codeOf(pid) && this.entrants.length + this.pairing.openCodes() >= this.maxEntrants) return fail('full', 'This tournament is full');
+    const r = this.pairing.makeCode(pid, code);
+    if (r.ok) this.host.changed(this);
+    return r;
+  }
+
+  /** Organizer only, before the start: swap two people, pair two people, or split a pair. */
+  arrange(pid: string, action: 'swap' | 'pair' | 'unpair', a: number, b?: number): Result {
+    if (pid !== this.organizerId) return fail('not_allowed', 'Only the organizer can change the teams');
+    if (this.state !== 'registering') return fail('wrong_state', 'Teams are locked once the tournament starts');
+    const r = this.pairing.arrange(this.entrants, action, a, b);
+    if (r.ok) this.host.changed(this);
+    return r;
   }
 
   /** Leave: before the start this removes the entrant (the organizer leaving cancels it);
@@ -122,6 +148,7 @@ export class Tournament {
   leave(pid: string): Result<{ cancelled: boolean }> {
     if (this.state === 'registering') {
       if (pid === this.organizerId) { this.state = 'cancelled'; this.host.changed(this); return { ok: true, cancelled: true }; }
+      this.pairing.remove(pid);
       this.entrants = this.entrants.filter((e) => e.playerId !== pid);
     } else if (this.state === 'running') {
       for (const r of this.rounds) for (const m of r) {
@@ -155,13 +182,12 @@ export class Tournament {
   }
   private pendingNames = new Set<string>(); // bot names handed out while the bracket is being built
 
-  /** Pair solos, add a bot partner to a leftover solo, fill with bot teams, shuffle seeding, build the bracket. */
+  /** Teams as shown at registration (team codes, organizer edits, solos paired in join order); a player
+   *  without a partner gets a bot partner; fill with bot teams, shuffle seeding, build the bracket. */
   private build(): void {
     const teams: TeamRef[] = [];
-    const humans = this.entrants;
-    for (let i = 0; i < humans.length; i += 2) {
-      const a = humans[i];
-      const b = humans[i + 1];
+    const byId = new Map(this.entrants.map((e) => [e.playerId, e]));
+    for (const [a, b] of this.pairing.teams(this.entrants).map((t) => t.map((pid) => byId.get(pid)!))) {
       const slots: [Slot, Slot] = [
         { playerId: a.playerId, name: a.name },
         b ? { playerId: b.playerId, name: b.name } : this.botSlot(),
@@ -282,6 +308,7 @@ export class Tournament {
       joined: this.hasPlayer(pid),
       capacity: this.maxEntrants,
       entrants: this.entrants.map((e) => ({ name: e.name, organizer: e.playerId === this.organizerId })),
+      teams: this.state === 'registering' ? this.pairing.view(this.entrants, this.organizerId, pid) : [],
       champion: this.champion && teamView(this.champion),
       runnerUp: this.runnerUp && teamView(this.runnerUp),
       rounds: this.rounds.map((r, ri) => ({

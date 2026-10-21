@@ -77,7 +77,7 @@ export class Hub {
   tables = new Map<string, Table>();
   tournaments = new Map<string, Tournament>();
   events = new Map<string, TableEvent>();
-  private codes = new Map<string, { kind: 'table' | 'tournament' | 'event'; id: string }>();
+  private codes = new Map<string, { kind: 'table' | 'tournament' | 'event' | 'tournamentTeam' | 'eventTeam'; id: string }>(); // *Team: a player-made team code
   readonly store: SubscriptionStore;
   readonly devUnlock: boolean;
   private ownerEmails: Set<string>;
@@ -284,11 +284,36 @@ export class Hub {
     }
   }
 
+  private dropTeamCodes(kind: 'tournamentTeam' | 'eventTeam', id: string): void {
+    for (const [c, v] of this.codes) if (v.kind === kind && v.id === id) this.codes.delete(c);
+  }
+
+  /** "Make a team" in the tournament or event the player is signed up for: a code their partner joins with. */
+  private makeTeam(p: Player): void {
+    const tour = p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined;
+    const ev = p.eventId ? this.events.get(p.eventId) : undefined;
+    const x = tour ?? ev;
+    if (!x) return this.err(p, 'not_found', 'You are not in a tournament');
+    const code = x.pairing.codeOf(p.id) ?? this.newCode();
+    const r = x.makeTeam(p.id, code);
+    if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
+    this.codes.set(code, { kind: tour ? 'tournamentTeam' : 'eventTeam', id: x.id });
+  }
+
+  /** Organizer: swap / pair / unpair people before the start. */
+  private arrangeTeams(p: Player, action: 'swap' | 'pair' | 'unpair', a: number, b?: number): void {
+    const x = (p.tournamentId ? this.tournaments.get(p.tournamentId) : undefined) ?? (p.eventId ? this.events.get(p.eventId) : undefined);
+    if (!x) return this.err(p, 'not_found', 'You are not in a tournament');
+    const r = x.arrange(p.id, action, a, b);
+    if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
+  }
+
   private removeTournament(id: string, why?: string): void {
     const t = this.tournaments.get(id);
     if (!t) return;
     this.tournaments.delete(id);
     this.codes.delete(t.code);
+    this.dropTeamCodes('tournamentTeam', id);
     for (const pid of t.audience()) {
       const p = this.players.get(pid);
       if (p && p.tournamentId === id) { p.tournamentId = null; this.send(pid, { t: 'tournamentLeft', reason: why ?? (t.state === 'cancelled' ? 'The organizer cancelled the tournament' : '') }); }
@@ -300,6 +325,7 @@ export class Hub {
     if (!e) return;
     this.events.delete(id);
     this.codes.delete(e.code);
+    this.dropTeamCodes('eventTeam', id);
     for (const pid of e.audience()) {
       const p = this.players.get(pid);
       if (p && p.eventId === id) { p.eventId = null; this.send(pid, { t: 'eventLeft', reason: why ?? (e.state === 'cancelled' ? 'The organizer cancelled the tournament' : '') }); }
@@ -324,6 +350,8 @@ export class Hub {
       case 'createEvent': return this.createEvent(p, msg.tables, msg.target ?? CONFIG.eventTarget, msg.teamMin4 !== false, msg.jokers === true);
       case 'startEvent': return this.startEvent(p);
       case 'leaveEvent': return this.leaveEvent(p);
+      case 'makeTeam': return this.makeTeam(p);
+      case 'arrangeTeams': return this.arrangeTeams(p, msg.action, msg.a, msg.b);
       case 'joinTable': return this.joinTable(p, this.tables.get(msg.id), true);
       case 'watchTable': return this.watchTable(p, this.tables.get(msg.id), true);
       case 'joinCode': return this.joinCode(p, msg.code);
@@ -515,6 +543,8 @@ export class Hub {
     if (!target) return this.err(p, 'not_found', 'No table or tournament with that code');
     if (target.kind === 'tournament') return this.joinTournament(p, this.tournaments.get(target.id), false);
     if (target.kind === 'event') return this.joinEvent(p, this.events.get(target.id));
+    if (target.kind === 'tournamentTeam') return this.joinTournament(p, this.tournaments.get(target.id), false, code);
+    if (target.kind === 'eventTeam') return this.joinEvent(p, this.events.get(target.id), code);
     this.joinTable(p, this.tables.get(target.id), false);
   }
 
@@ -569,8 +599,8 @@ export class Hub {
   private watchCode(p: Player, code: string): void {
     const target = this.codes.get(code);
     if (!target) return this.err(p, 'not_found', 'No table or tournament with that code');
-    if (target.kind === 'tournament') return this.watchTournament(p, this.tournaments.get(target.id));
-    if (target.kind === 'event') return this.watchEvent(p, this.events.get(target.id));
+    if (target.kind === 'tournament' || target.kind === 'tournamentTeam') return this.watchTournament(p, this.tournaments.get(target.id));
+    if (target.kind === 'event' || target.kind === 'eventTeam') return this.watchEvent(p, this.events.get(target.id));
     this.watchTable(p, this.tables.get(target.id), false);
   }
 
@@ -756,7 +786,7 @@ export class Hub {
     this.markLobbyDirty();
   }
 
-  private joinTournament(p: Player, t: Tournament | undefined, byId: boolean): void {
+  private joinTournament(p: Player, t: Tournament | undefined, byId: boolean, teamCode?: string): void {
     if (byId && this.needsInvite(p)) return this.err(p, 'upgrade_required', inviteMessage());
     if (!t || (byId && !t.isPublic)) return this.err(p, 'not_found', 'Tournament not found');
     if (this.needsInvite(p) && !this.creatorIsPremium(t.organizerId)) return this.err(p, 'not_allowed', hostNotPremiumMessage());
@@ -764,7 +794,7 @@ export class Hub {
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
     this.leaveCurrent(p);
-    const r = t.join(p.id, p.nick);
+    const r = t.join(p.id, p.nick, teamCode);
     if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
     p.tournamentId = t.id;
     t.viewers.delete(p.id);
@@ -869,14 +899,14 @@ export class Hub {
     this.pushEvent(ev);
   }
 
-  private joinEvent(p: Player, ev: TableEvent | undefined): void {
+  private joinEvent(p: Player, ev: TableEvent | undefined, teamCode?: string): void {
     if (!ev) return this.err(p, 'not_found', 'Tournament not found');
     if (this.needsInvite(p) && !this.creatorIsPremium(ev.organizerId)) return this.err(p, 'not_allowed', hostNotPremiumMessage());
     if (p.eventId === ev.id) return this.pushEvent(ev);
     const busy = this.busyReason(p);
     if (busy) return this.err(p, 'busy', busy);
     this.leaveCurrent(p);
-    const r = ev.join(p.id, p.nick);
+    const r = ev.join(p.id, p.nick, teamCode);
     if (!r.ok) return this.err(p, r.code as ErrorCode, r.message);
     p.eventId = ev.id;
     ev.viewers.delete(p.id);

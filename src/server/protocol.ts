@@ -34,6 +34,8 @@ export type ClientMsg =
   | { t: 'createEvent'; tables: number; target?: number; teamMin4?: boolean; jokers?: boolean }
   | { t: 'startEvent' }
   | { t: 'leaveEvent' }
+  | { t: 'makeTeam' }
+  | { t: 'arrangeTeams'; action: 'swap' | 'pair' | 'unpair'; a: number; b?: number }
   | { t: 'goPremium' }
   | { t: 'restorePremium'; email: string }
   | { t: 'ownerCode'; code: string }
@@ -85,7 +87,7 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       return { msg: { t: 'hello', nick: sanitizeNick(o.nick), token: o.token as string | undefined } };
     case 'ping': case 'quickPlay': case 'createFriend': case 'cancelMatch': case 'startTable': case 'ready': case 'rematch': case 'leaveTable': case 'endGame':
     case 'startTournament': case 'leaveTournament': case 'devToggleSubscription':
-    case 'addBots': case 'swapPartners': case 'startEvent': case 'leaveEvent': case 'goPremium':
+    case 'addBots': case 'swapPartners': case 'startEvent': case 'leaveEvent': case 'goPremium': case 'makeTeam':
       return { msg: { t: o.t } as ClientMsg };
     case 'createTable':
       if (typeof o.isPublic !== 'boolean') return bad('isPublic must be boolean');
@@ -113,6 +115,12 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
       if (o.teamMin4 !== undefined && typeof o.teamMin4 !== 'boolean') return bad('teamMin4 must be boolean');
       if (o.jokers !== undefined && typeof o.jokers !== 'boolean') return bad('jokers must be boolean');
       return { msg: { t: 'createEvent', tables: o.tables as number, target: o.target as number | undefined, teamMin4: o.teamMin4 as boolean | undefined, jokers: o.jokers as boolean | undefined } };
+    case 'arrangeTeams': {
+      if (o.action !== 'swap' && o.action !== 'pair' && o.action !== 'unpair') return bad('Bad action');
+      const key = (v: unknown) => Number.isInteger(v) && (v as number) > 0 && (v as number) < 1e9;
+      if (!key(o.a) || (o.action !== 'unpair' && !key(o.b))) return bad('Pick a player');
+      return { msg: { t: 'arrangeTeams', action: o.action, a: o.a as number, b: o.action === 'unpair' ? undefined : o.b as number } };
+    }
     case 'chat': {
       if (!str(o.text)) return bad('Message must be text');
       const text = sanitizeChat(o.text);

@@ -1,6 +1,6 @@
 // "Create Tournament" (premium host): a multi-table event of one to eight tables.
-// Players join with the event code. When the organizer starts it, entrants are seated at tables of four in
-// join order (human seats first, bots fill the rest); only as many tables as needed are opened (at most the
+// Players join with the event code. When the organizer starts it, the teams (team codes, organizer edits,
+// solos paired in join order) are seated two per table (bots fill the rest); only as many tables as needed are opened (at most the
 // number the organizer chose). Every table plays ONE game to the event target; the event ends when all
 // tables are finished and the winning teams are listed. Event tables reuse the tournament-table rules
 // (no joining mid-game, forfeit / fast-forward when a team or everyone leaves).
@@ -8,6 +8,7 @@
 import { CONFIG } from '../config.js';
 import { secureRng } from '../engine/cards.js';
 import { Persona, pickPersona } from './personas.js';
+import { Entrant, Pairing } from './pairing.js';
 
 export interface EventSeat { playerId: string | null; name: string; persona?: Persona } // playerId null = bot
 export type EventTableStatus = 'live' | 'done';
@@ -46,7 +47,7 @@ export interface EventInit {
   host: EventHost;
 }
 
-/** Entrants k=0..3 of a table take seats 0,2,1,3 so that consecutive joiners are partners. */
+/** People k=0..3 of a table (two teams) take seats 0,2,1,3 so that each team's two players are partners. */
 const SEAT_ORDER = [0, 2, 1, 3];
 
 export class TableEvent {
@@ -60,7 +61,9 @@ export class TableEvent {
   readonly createdAt = Date.now();
   state: EState = 'registering';
   finishedAt: number | null = null;
-  entrants: { playerId: string; name: string }[] = [];
+  entrants: Entrant[] = [];
+  readonly pairing = new Pairing();
+  private nextKey = 1;
   viewers = new Set<string>();
   results: EventTableEntry[] = [];
   private host: EventHost;
@@ -87,18 +90,42 @@ export class TableEvent {
     return [...ids];
   }
 
-  join(pid: string, name: string): Result {
+  /** Join; with a team code the player is locked in as that code maker's partner. */
+  join(pid: string, name: string, teamCode?: string): Result {
     if (this.state !== 'registering') return fail('wrong_state', 'Registration is closed');
     if (this.hasEntrant(pid)) return { ok: true };
-    if (this.entrants.length >= this.capacity) return fail('full', 'This tournament is full');
-    this.entrants.push({ playerId: pid, name });
+    if (teamCode) { const c = this.pairing.checkCode(teamCode); if (!c.ok) return c; }
+    const held = this.pairing.openCodes() - (teamCode ? 1 : 0); // spots held for partners with a team code
+    if (this.entrants.length + held >= this.capacity) return fail('full', 'This tournament is full');
+    this.entrants.push({ playerId: pid, name, key: this.nextKey++ });
+    if (teamCode) this.pairing.useCode(teamCode, pid);
     this.host.changed(this);
     return { ok: true };
+  }
+
+  /** "Make a team": hold a spot for a partner, who joins with this code. */
+  makeTeam(pid: string, code: string): Result {
+    if (this.state !== 'registering') return fail('wrong_state', 'Registration is closed');
+    if (!this.hasEntrant(pid)) return fail('not_found', 'Join the tournament first');
+    if (!this.pairing.codeOf(pid) && this.entrants.length + this.pairing.openCodes() >= this.capacity) return fail('full', 'This tournament is full');
+    const r = this.pairing.makeCode(pid, code);
+    if (r.ok) this.host.changed(this);
+    return r;
+  }
+
+  /** Organizer only, before the start: swap two people, pair two people, or split a pair. */
+  arrange(pid: string, action: 'swap' | 'pair' | 'unpair', a: number, b?: number): Result {
+    if (pid !== this.organizerId) return fail('not_allowed', 'Only the organizer can change the teams');
+    if (this.state !== 'registering') return fail('wrong_state', 'Teams are locked once the tournament starts');
+    const r = this.pairing.arrange(this.entrants, action, a, b);
+    if (r.ok) this.host.changed(this);
+    return r;
   }
 
   leave(pid: string): Result<{ cancelled: boolean }> {
     if (this.state === 'registering') {
       if (pid === this.organizerId) { this.state = 'cancelled'; this.host.changed(this); return { ok: true, cancelled: true }; }
+      this.pairing.remove(pid);
       this.entrants = this.entrants.filter((e) => e.playerId !== pid);
     }
     this.viewers.delete(pid);
@@ -109,14 +136,17 @@ export class TableEvent {
   start(pid: string): Result {
     if (pid !== this.organizerId) return fail('not_allowed', 'Only the organizer can start the tournament');
     if (this.state !== 'registering') return fail('wrong_state', 'Already started');
-    const count = Math.min(this.tables, Math.max(1, Math.ceil(this.entrants.length / 4)));
+    // Two teams per table, as shown at registration; a team of one leaves its partner seat to a bot
+    const byId = new Map(this.entrants.map((e) => [e.playerId, e]));
+    const people = this.pairing.teams(this.entrants).flatMap((t) => [byId.get(t[0])!, t[1] ? byId.get(t[1])! : null]);
+    const count = Math.min(this.tables, Math.max(1, Math.ceil(people.length / 4)));
     this.state = 'running';
     this.results = [];
     const used = new Set<string>(this.entrants.map((e) => e.name)); // bot names are unique across the whole event
     for (let i = 0; i < count; i++) {
-      const group = this.entrants.slice(i * 4, i * 4 + 4);
+      const group = people.slice(i * 4, i * 4 + 4);
       const seats: EventSeat[] = [0, 1, 2, 3].map(() => ({ playerId: null, name: '' }));
-      group.forEach((e, k) => { seats[SEAT_ORDER[k]] = { playerId: e.playerId, name: e.name }; });
+      group.forEach((e, k) => { if (e) seats[SEAT_ORDER[k]] = { playerId: e.playerId, name: e.name }; });
       seats.forEach((s, k) => { if (!s.playerId) seats[k] = this.botSeat(used); });
       const entry: EventTableEntry = { no: i + 1, seats, tableId: null, tableCode: null, status: 'live', winner: null, scores: null, forfeit: false };
       this.results.push(entry);
@@ -179,6 +209,7 @@ export class TableEvent {
       joined: this.hasPlayer(pid),
       capacity: this.capacity,
       entrants: this.entrants.map((e) => ({ name: e.name, organizer: e.playerId === this.organizerId })),
+      teams: this.state === 'registering' ? this.pairing.view(this.entrants, this.organizerId, pid) : [],
       results: tables,
       winners: tables.filter((x) => x.status === 'done' && x.winner !== null)
         .map((x) => ({ table: x.no, team: x.teams[x.winner as 0 | 1], scores: x.scores })),
