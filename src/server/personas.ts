@@ -37,7 +37,7 @@ export const FACE_BOTS: { name: string; face: string }[] = [
   { name: 'Red Hood Rome', face: 'anime2' }, { name: 'Four Aces', face: 'aces' }, { name: 'Whiskers', face: 'cat' },
   { name: 'Buckets', face: 'hoops' }, { name: 'Spray Can Sam', face: 'graffiti' }, { name: 'Lone Wolf', face: 'wolf' },
   { name: 'Granny Hands', face: 'granny' }, { name: 'Boombox Benny', face: 'boombox' }, { name: 'Purple Rain', face: 'anime1' },
-  { name: 'Chopper Chuck', face: 'chopper' },
+  { name: 'Chopper Chuck', face: 'chopper' }, { name: 'B Nasty', face: 'bnasty' },
 ];
 export const RAW_ONE = { name: 'Raw 1', face: 'raw1' };
 

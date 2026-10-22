@@ -25,7 +25,7 @@ test('presets are real files and never a named computer player\'s photo', () => 
     assert.ok(fs.existsSync(path.resolve('public/faces', id + '.jpg')), id);
     assert.ok(!people.has(id), id);
   }
-  for (const id of ['marcus', 'tasha', 'jerome', 'keisha', 'dre', 'luis', 'kim', 'mari', 'pearl', 'granny', 'cooper', 'raw1', 'anime1', 'anime2']) assert.ok(!(PRESET_AVATARS as readonly string[]).includes(id));
+  for (const id of ['marcus', 'tasha', 'jerome', 'keisha', 'dre', 'luis', 'kim', 'mari', 'pearl', 'granny', 'cooper', 'raw1', 'bnasty', 'anime1', 'anime2']) assert.ok(!(PRESET_AVATARS as readonly string[]).includes(id));
 });
 
 test('the fallback face is fixed per seed, always valid, and matches the browser copy', () => {
