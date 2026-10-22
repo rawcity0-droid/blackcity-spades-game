@@ -72,7 +72,7 @@ test('event: tables and target change; team codes are tables x 2; refuses when p
 });
 
 test('protocol: editTournament / editEvent / setRules isPublic are validated', () => {
-  assert.deepEqual(parseClientMessage(JSON.stringify({ t: 'editTournament', size: 8, jokers: true })), { msg: { t: 'editTournament', size: 8, isPublic: undefined, teamMin4: undefined, jokers: true, setsOut: undefined } });
+  assert.deepEqual(parseClientMessage(JSON.stringify({ t: 'editTournament', size: 8, jokers: true })), { msg: { t: 'editTournament', size: 8, isPublic: undefined, teamMin4: undefined, jokers: true, setsOut: undefined, bigBids: undefined } });
   assert.ok('error' in parseClientMessage(JSON.stringify({ t: 'editEvent', tables: 'two' })));
   assert.ok('error' in parseClientMessage(JSON.stringify({ t: 'editTournament', isPublic: 'yes' })));
   assert.equal((parseClientMessage(JSON.stringify({ t: 'setRules', isPublic: true })) as any).msg.isPublic, true);

@@ -789,7 +789,7 @@ function openEventModal(edit) {
   closeModal('play');
   const cfg = state.config || {};
   const opts = cfg.eventTableOptions || [1, 2, 3, 4, 5, 6, 7, 8];
-  const f = edit ? { tables: edit.tables, target: edit.target, teamMin4: !!edit.teamMin, jokers: !!edit.jokers, setsOut: !!edit.setsOut }
+  const f = edit ? { tables: edit.tables, target: edit.target, teamMin4: !!edit.teamMin, jokers: !!edit.jokers, setsOut: !!edit.setsOut, bigBids: !!edit.bigBids }
     : { tables: 2, target: cfg.eventTarget || 250, teamMin4: true, jokers: false };
   const { el, body } = modalCard({ title: edit ? 'Edit settings' : 'Create Tournament', id: 'event', cls: 'small' });
   body.append(
@@ -801,8 +801,8 @@ function openEventModal(edit) {
     ...bidRuleField(f),
     ...setRuleField(f),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('event')),
-      edit ? btn('gold', 'Save', () => { send({ t: 'editEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut }); closeModal('event'); })
-        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut }); })));
+      edit ? btn('gold', 'Save', () => { send({ t: 'editEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut, bigBids: !!f.bigBids }); closeModal('event'); })
+        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createEvent', tables: f.tables, target: f.target, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut, bigBids: !!f.bigBids }); })));
   openModal('event', el);
 }
 
@@ -811,6 +811,8 @@ function setRuleField(f) {
   return [
     h('div', { class: 'field-label', text: 'Set rule' }),
     seg([[false, 'Regular'], [true, '2 sets and out']], !!f.setsOut, (v) => { f.setsOut = v; }),
+    h('div', { class: 'field-label', text: 'Big bids' }),
+    seg([[false, 'Off'], [true, '10 for 200 + Boston']], !!f.bigBids, (v) => { f.bigBids = v; }),
   ];
 }
 
@@ -842,8 +844,8 @@ function openBracketModal(edit) {
     h('div', { class: 'field-label', text: 'Who can find it' }),
     seg([[false, 'Private (code only)'], [true, 'Public (listed)']], f.isPublic, (v) => { f.isPublic = v; }),
     h('div', { class: 'btn-row' }, btn('soft', 'Cancel', () => closeModal('bracket')),
-      edit ? btn('gold', 'Save', () => { send({ t: 'editTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut }); closeModal('bracket'); })
-        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut }); })));
+      edit ? btn('gold', 'Save', () => { send({ t: 'editTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut, bigBids: !!f.bigBids }); closeModal('bracket'); })
+        : btn('gold', 'Create', () => { if (!requireName()) return; send({ t: 'createTournament', size: f.size, isPublic: f.isPublic, teamMin4: f.teamMin4, jokers: f.jokers, setsOut: !!f.setsOut, bigBids: !!f.bigBids }); })));
   openModal('bracket', el);
 }
 
@@ -916,6 +918,10 @@ function openRules() {
       'Trump order from high to low: Big Joker, Little Joker, 2 of Spades, Ace of Spades, King of Spades … down to the 3 of Spades. Diamonds and hearts run Ace down to 3.',
       'Bidding is like Team min 4: no Nil, a 0 is a plain zero, any player can bid 0 to 13, and each team plays for at least 4 books.',
       'No sandbagging: tricks over the contract score nothing extra and there is no bag penalty. Making the contract scores 10 per book; falling short is a set of −10 per book, so a team that takes fewer than 4 books is always set.'),
+    sec('Big bids (Premium hosts)',
+      'An extra rule the host can turn on. Everything else stays the same.',
+      'Ten for 200: when partners’ bids add up to exactly 10 and the team makes it, the contract scores 200 instead of 100. Bags count as usual. Falling short is a normal set (−100).',
+      'Boston: a team bid of 13. Take all 13 books and your team wins the game on the spot. Miss even one and it is a normal set (−130).'),
     sec('Winning',
       `The first team to reach ${targets} points (set by the table) wins. A team that falls to ${r.loseScore} or lower loses at once.`,
       'If both teams reach the target in the same hand, the higher score wins. If the scores are exactly equal, play continues with more hands until one team is ahead.'),
@@ -1369,7 +1375,8 @@ function hostLobby(t) {
       chip(`First to ${r.target}`, () => send({ t: 'setRules', target: other })),
       chip(`Break rule ${r.breakRule ? 'on' : 'off'}`, () => send({ t: 'setRules', breakRule: !r.breakRule })),
       r.jokers ? h('span', { class: 'rchip', text: 'No sandbags' }) : chip(`Sandbags ${r.sandbags ? 'on' : 'off'}`, () => send({ t: 'setRules', sandbags: !r.sandbags })),
-      ...(t.quick || t.practice ? [] : [chip(r.setsOut ? 'Set rule: 2 sets and out' : 'Set rule: Regular', () => send({ t: 'setRules', setsOut: !r.setsOut }))]),
+      ...(t.quick || t.practice ? [] : [chip(r.setsOut ? 'Set rule: 2 sets and out' : 'Set rule: Regular', () => send({ t: 'setRules', setsOut: !r.setsOut })),
+        chip(r.bigBids ? 'Big bids: 10 for 200 + Boston' : 'Big bids: off', () => send({ t: 'setRules', bigBids: !r.bigBids }))]),
       ...(t.quick || t.practice ? [] : [chip(bidRuleLabel(t.bidRules && t.bidRules.teamMin, t.bidRules && t.bidRules.jokers), () => send({ t: 'setRules', ...nextBidRule(t.bidRules) }))]),
       t.quick || t.practice ? h('span', { class: 'rchip', text: t.quick ? 'Quick play' : 'Practice table' })
         : chip(t.isPublic ? 'Public table' : 'Private · Premium host', () => send({ t: 'setRules', isPublic: !t.isPublic }))),
@@ -1439,6 +1446,7 @@ function gameOver(t) {
   const { el, body } = modalCard({ title, id: 'over', cls: 'small', onClose: midSeries ? () => closeModal('over') : () => send({ t: 'leaveTable' }) });
   body.append(
     t.forfeit ? h('p', { class: 'lead', text: 'The other team left the match, so this team advances.' }) : null,
+    t.endReason === 'boston' ? h('p', { class: 'lead center-text boston', text: 'Boston! ' + (mine === null ? `${teamLabel(w)} bid 13 and took every book.` : w === mine ? 'Your team bid 13 and took every book.' : 'The other team bid 13 and took every book.') }) : null,
     t.endReason === 'sets' ? h('p', { class: 'lead center-text', text: 'Set twice — game over. ' + (mine === null ? `${teamLabel(1 - w)} were set twice.` : 1 - w === mine ? 'Your team was set twice.' : 'The other team was set twice.') }) : null,
     h('table', { class: 'sum' }, h('tbody', {}, order.map((team) => h('tr', {}, h('td', { text: teamLabel(team) }), h('td', { text: String(t.scores[team]) }))))),
     t.tournament && S ? h('p', { class: 'lead center-text series-score', text: seriesText(S, order) }) : null,
@@ -1512,7 +1520,7 @@ function renderBracketSheet() {
   if (!T) return;
   const sh = sheetShell(`Bracket · ${T.size} teams`, T.state, stateBadge(T.state));
   sh.append(codeBox(T.code, 'TOURNAMENT CODE'),
-    h('div', { class: 'muted', text: `Free to join · matches to ${T.rounds.length ? T.rounds[0].target : state.config.tournamentTargetEarly}, final to ${state.config.tournamentTargetFinal} · ${bidRuleLabel(T.teamMin, T.jokers)}${T.setsOut ? ' · 2 sets and out' : ''}` }));
+    h('div', { class: 'muted', text: `Free to join · matches to ${T.rounds.length ? T.rounds[0].target : state.config.tournamentTargetEarly}, final to ${state.config.tournamentTargetFinal} · ${bidRuleLabel(T.teamMin, T.jokers)}${T.setsOut ? ' · 2 sets and out' : ''}${T.bigBids ? ' · Big bids' : ''}` }));
   if (T.champion) {
     sh.append(h('div', { class: 'champ' }, h('div', { class: 'muted', text: 'Champion' }), h('h3', { text: `🏆 ${T.champion.name}` }),
       T.runnerUp ? h('div', { text: `Runner-up: ${T.runnerUp.name}` }) : null));
@@ -1578,7 +1586,7 @@ function renderEventSheet() {
   if (!E) return;
   const sh = sheetShell(`Tournament · ${E.tables} ${E.tables === 1 ? 'table' : 'tables'}`, E.state, stateBadge(E.state));
   sh.append(codeBox(E.code, 'TOURNAMENT CODE'),
-    h('div', { class: 'muted', text: `Free to join · each table plays one game to ${E.target} · ${bidRuleLabel(E.teamMin, E.jokers)}${E.setsOut ? ' · 2 sets and out' : ''} · up to ${E.capacity} players` }));
+    h('div', { class: 'muted', text: `Free to join · each table plays one game to ${E.target} · ${bidRuleLabel(E.teamMin, E.jokers)}${E.setsOut ? ' · 2 sets and out' : ''}${E.bigBids ? ' · Big bids' : ''} · up to ${E.capacity} players` }));
   if (E.state === 'registering') {
     sh.append(h('div', { class: 'panel' },
       h('h3', { text: `Players ${E.entrants.length}/${E.capacity}` }),

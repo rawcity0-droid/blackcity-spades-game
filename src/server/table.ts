@@ -61,6 +61,7 @@ export interface TableInit {
   sandbags?: boolean;
   hostId: string | null;
   practice?: boolean; // a solo table against bots: never listed, never joinable by anyone else
+  bigBids?: boolean; // "Big bids" (Premium-hosted): 10 made = 200, 13 made (Boston) wins
   setsOut?: boolean; // "2 sets and out" (Premium-hosted): a team set twice in a game loses
   jokers?: boolean; // Jokers mode (Premium-hosted): jokers deck, team min 4, no Nil, no bags
   teamMin?: number; // the partners' bids must add up to at least this (Premium-hosted tables); 0 or unset = regular spades
@@ -97,6 +98,7 @@ export class Table {
   teamMin: number;
   jokers: boolean;
   setsOut: boolean;
+  bigBids: boolean;
   seats: SeatInfo[] = [0, 1, 2, 3].map(() => emptySeat());
   watchers = new Set<string>();
   waiters: string[] = [];                 // watchers who asked for a seat; seated between hands
@@ -138,7 +140,8 @@ export class Table {
     this.quick = init.quick === true;
     this.friend = init.friend === true;
     this.jokers = !!init.jokers && !init.quick && !init.practice;
-    this.setsOut = !!init.setsOut && !init.quick && !init.practice; // Play now / friend / practice stay Regular
+    this.setsOut = !!init.setsOut && !init.quick && !init.practice;
+    this.bigBids = !!init.bigBids && !init.quick && !init.practice; // Play now / friend / practice stay Regular
     this.teamMin = this.jokers ? CONFIG.rules.premiumTeamMin : init.teamMin ?? 0;
     this.timings = init.timings;
     this.hooks = init.hooks;
@@ -285,7 +288,7 @@ export class Table {
   }
 
   /** Host only, before the game starts: change target / break rule / sandbags. */
-  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean; jokers?: boolean; isPublic?: boolean; setsOut?: boolean }): Result {
+  setRules(pid: string, patch: { target?: number; breakRule?: boolean; sandbags?: boolean; teamMin4?: boolean; jokers?: boolean; isPublic?: boolean; setsOut?: boolean; bigBids?: boolean }): Result {
     if (this.status !== 'waiting') return fail('wrong_state', 'Rules can’t be changed during a game. End the game from the menu to set up a new one.');
     if (pid !== this.hostId) return fail('not_allowed', 'Only the host can change the rules');
     if (this.friend) return fail('not_allowed', 'This game starts when your friend joins');
@@ -295,6 +298,8 @@ export class Table {
     }
     if (patch.setsOut !== undefined && patch.setsOut && (this.quick || this.practice)) return fail('not_allowed', '2 sets and out needs a Premium host');
     if (patch.setsOut !== undefined) this.setsOut = patch.setsOut;
+    if (patch.bigBids && (this.quick || this.practice)) return fail('not_allowed', 'Big bids needs a Premium host');
+    if (patch.bigBids !== undefined) this.bigBids = patch.bigBids;
     if (patch.breakRule !== undefined) this.breakRule = patch.breakRule;
     if (patch.isPublic !== undefined && !this.quick && !this.practice) this.isPublic = patch.isPublic;
     if (patch.sandbags !== undefined) this.sandbags = patch.sandbags;
@@ -339,7 +344,7 @@ export class Table {
   startGame(): void {
     this.seats.forEach((s, i) => { if (s.kind === 'empty') this.seatBot(i); });
     this.teamHadHumans = [0, 1].map((t) => this.seats.some((s, i) => i % 2 === t && s.kind === 'human')) as [boolean, boolean];
-    this.game = createGame({ target: this.target, breakRule: this.breakRule, sandbags: this.jokers ? false : this.sandbags, teamMin: this.teamMin, jokers: this.jokers, setsOut: this.setsOut, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
+    this.game = createGame({ target: this.target, breakRule: this.breakRule, sandbags: this.jokers ? false : this.sandbags, teamMin: this.teamMin, jokers: this.jokers, setsOut: this.setsOut, bigBids: this.bigBids, rng: this.rng, dealer: Math.floor(this.rng() * 4) });
     this.status = 'playing';
     this.startedAt = Date.now();
     this.hooks.gameStarted?.(this);
@@ -648,7 +653,7 @@ export class Table {
       friend: this.friend,
       bidRules: { minBid: CONFIG.rules.minBid, maxBid: CONFIG.rules.maxBid, allowNil: CONFIG.rules.allowNil, teamMin: this.teamMin, jokers: this.jokers },
       target: this.target,
-      rules: { target: this.target, breakRule: this.breakRule, sandbags: this.jokers ? false : this.sandbags, jokers: this.jokers, setsOut: this.setsOut },
+      rules: { target: this.target, breakRule: this.breakRule, sandbags: this.jokers ? false : this.sandbags, jokers: this.jokers, setsOut: this.setsOut, bigBids: this.bigBids },
       hostSeat: this.hostId ? this.seatOf(this.hostId) : -1,
       phase,
       mySeat: me,

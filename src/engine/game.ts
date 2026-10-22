@@ -51,8 +51,9 @@ export interface GameState {
   jokers: boolean;      // Jokers mode: 2♦/2♥ out, Big and Little Joker in as top trumps (see cards.ts); no Nil, no bags
   teamMin: number;      // the two partners' bids must add up to at least this (0 = no team minimum)
   setsOut: boolean;     // "2 sets and out": a team set (books contract failed) for the 2nd time in this game loses at once
+  bigBids: boolean;     // "Big bids": a team contract of exactly 10 made scores 200; a 13 made (Boston) wins the game at once
   sets: [number, number]; // times each team was set this game
-  endReason: 'target' | 'sets' | null;
+  endReason: 'target' | 'sets' | 'boston' | null;
   rng: Rng;
   phase: Phase;
   handNo: number;
@@ -72,7 +73,12 @@ export interface GameState {
   winner: Team | null;
 }
 
-export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean; teamMin?: number; jokers?: boolean; setsOut?: boolean }
+export interface GameOptions { target?: number; rng?: Rng; dealer?: number; breakRule?: boolean; sandbags?: boolean; teamMin?: number; jokers?: boolean; setsOut?: boolean; bigBids?: boolean }
+
+/** "Big bids": the 10-book contract that pays double, and the Boston that wins outright. */
+export const BIG_BID = 10;
+export const BIG_BID_POINTS = 200;
+export const BOSTON = 13;
 
 /** Sets that end the game under "2 sets and out". */
 export const SETS_OUT = 2;
@@ -85,6 +91,7 @@ export function createGame(opts: GameOptions = {}): GameState {
     jokers: !!opts.jokers,
     teamMin: opts.jokers ? Math.max(opts.teamMin ?? 0, CONFIG.rules.premiumTeamMin) : opts.teamMin ?? 0,
     setsOut: !!opts.setsOut,
+    bigBids: !!opts.bigBids,
     sets: [0, 0],
     endReason: null,
     rng: opts.rng ?? secureRng,
@@ -233,6 +240,7 @@ export function scoreTeam(
   sandbags = true,
   nilAllowed = true, // false on team-minimum tables: a 0 bid is a plain zero, part of the team contract (no Nil bonus or penalty)
   board = 0, // team-minimum tables: the contract is max(combined bid, board)
+  bigBids = false, // "Big bids": a made contract of exactly 10 scores 200 instead of 100 (a 13, Boston, is handled by finishHand)
 ): { result: TeamHandResult; bagsAfter: number } {
   let bid = 0;
   let won = 0;
@@ -257,7 +265,7 @@ export function scoreTeam(
   if (contract > 0) {
     made = won >= contract;
     if (made) {
-      contractPoints = 10 * contract;
+      contractPoints = bigBids && contract === BIG_BID ? BIG_BID_POINTS : 10 * contract;
       overtricks = won - contract;
     } else {
       contractPoints = -10 * contract;
@@ -300,8 +308,8 @@ export function setsWinner(g: Pick<GameState, 'setsOut' | 'sets' | 'scores'>): T
 
 function finishHand(g: GameState): void {
   const bids = g.bids.map((b) => b ?? 0);
-  const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0], g.sandbags, !g.teamMin, g.teamMin);
-  const t1 = scoreTeam([1, 3], bids, g.tricksWon, g.bags[1], g.sandbags, !g.teamMin, g.teamMin);
+  const t0 = scoreTeam([0, 2], bids, g.tricksWon, g.bags[0], g.sandbags, !g.teamMin, g.teamMin, g.bigBids);
+  const t1 = scoreTeam([1, 3], bids, g.tricksWon, g.bags[1], g.sandbags, !g.teamMin, g.teamMin, g.bigBids);
   g.scores = [g.scores[0] + t0.result.delta, g.scores[1] + t1.result.delta];
   g.bags = [t0.bagsAfter, t1.bagsAfter];
   g.lastHand = {
@@ -315,7 +323,14 @@ function finishHand(g: GameState): void {
   // A failed Nil alone is not a set: only the team's books contract (made === false) counts
   if (t0.result.made === false) g.sets[0] += 1;
   if (t1.result.made === false) g.sets[1] += 1;
-  g.winner = setsWinner(g) ?? gameWinner(g.scores, g.target);
-  g.endReason = g.winner === null ? null : setsWinner(g) !== null ? 'sets' : 'target';
+  // Boston: a team that bid 13 and took all 13 wins right away (missed, it is a normal set, scored above)
+  const boston = !g.bigBids ? null : ([t0.result, t1.result] as const).findIndex((r) => r.made === true && (r.contract ?? r.bid) === BOSTON);
+  if (boston !== null && boston >= 0) {
+    g.winner = boston as Team;
+    g.endReason = 'boston';
+  } else {
+    g.winner = setsWinner(g) ?? gameWinner(g.scores, g.target);
+    g.endReason = g.winner === null ? null : setsWinner(g) !== null ? 'sets' : 'target';
+  }
   g.phase = g.winner === null ? 'handOver' : 'gameOver';
 }
