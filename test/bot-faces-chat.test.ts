@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { Table, FACE_BOTS, RAW_ONE, defaultTimings } from '../src/server/table.js';
 import { secureRng } from '../src/engine/cards.js';
 import { sleep } from './helpers.js';
+import { fallbackAvatar } from '../src/server/avatar.js';
 
 function makeTable(pace: number, rng = secureRng) {
   const sent: any[] = [];
@@ -50,12 +51,12 @@ test('a bot seat can get the Raw 1 persona, a photo persona, or just a name, and
   assert.ok(seen.size > 30, 'a wide pool of names');
 });
 
-test('the table view only carries a photo id for bots, never for people', () => {
+test('people never get a photo id: without a pick they get their own fixed drawn face', () => {
   const { t } = makeTable(0, () => 0);
   t.seatHuman(0, 'p1', 'Raw', true);
   t.startGame();
   const v: any = t.view('p1');
-  assert.equal(v.seats[0].face, undefined);
+  assert.equal(v.seats[0].face, fallbackAvatar('p:p1'));
   assert.equal(v.seats[1].face, 'raw1');
   t.dispose();
 });

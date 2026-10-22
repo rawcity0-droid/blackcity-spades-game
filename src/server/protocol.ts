@@ -1,11 +1,13 @@
 // WebSocket JSON protocol: message shapes, validation and nickname sanitizing.
 // Every client message is {t: "<type>", ...fields}. Every server message is {t: "<type>", ...fields}.
 
+import { validAvatar } from './avatar.js';
 import { CONFIG } from '../config.js';
 import { isCard } from '../engine/cards.js';
 
 export type ClientMsg =
-  | { t: 'hello'; nick: string; token?: string }
+  | { t: 'hello'; nick: string; token?: string; face?: string }
+  | { t: 'setFace'; face?: string }
   | { t: 'ping' }
   | { t: 'setNick'; nick: string }
   | { t: 'createTable'; isPublic: boolean; target: number; breakRule?: boolean; sandbags?: boolean; practice?: boolean; teamMin4?: boolean; jokers?: boolean; setsOut?: boolean }
@@ -87,7 +89,9 @@ export function parseClientMessage(raw: string): { msg: ClientMsg } | { error: s
     case 'hello':
       if (o.token !== undefined && !(str(o.token) && TOKEN_RE.test(o.token))) return bad('Bad token');
       // An empty nick means "no name": a returning player keeps their saved name, a new one has none (no default is ever assigned)
-      return { msg: { t: 'hello', nick: sanitizeNick(o.nick), token: o.token as string | undefined } };
+      return { msg: { t: 'hello', nick: sanitizeNick(o.nick), token: o.token as string | undefined, face: validAvatar(o.face) } };
+    case 'setFace':
+      return { msg: { t: 'setFace', face: validAvatar(o.face) } }; // unknown or fake faces are dropped
     case 'ping': case 'quickPlay': case 'createFriend': case 'cancelMatch': case 'startTable': case 'ready': case 'rematch': case 'leaveTable': case 'endGame':
     case 'startTournament': case 'leaveTournament': case 'devToggleSubscription':
     case 'addBots': case 'swapPartners': case 'startEvent': case 'leaveEvent': case 'goPremium':

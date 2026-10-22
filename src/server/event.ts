@@ -5,6 +5,7 @@
 // tables are finished and the winning teams are listed. Event tables reuse the tournament-table rules
 // (no joining mid-game, forfeit / fast-forward when a team or everyone leaves).
 
+import { fallbackAvatar } from './avatar.js';
 import { CONFIG } from '../config.js';
 import { secureRng } from '../engine/cards.js';
 import { Persona, pickPersona } from './personas.js';
@@ -201,7 +202,7 @@ export class TableEvent {
       const seats = side === 0 ? [e.seats[0], e.seats[2]] : [e.seats[1], e.seats[3]];
       return {
         name: seats.map((s) => s.name).join(' & '),
-        players: seats.map((s) => ({ name: s.name, bot: s.playerId === null, face: s.playerId === null ? s.persona?.face : undefined })),
+        players: seats.map((s) => ({ name: s.name, bot: s.playerId === null, face: s.playerId === null ? s.persona?.face ?? fallbackAvatar('n:' + s.name) : undefined })),
         mine: seats.some((s) => s.playerId === pid),
       };
     };

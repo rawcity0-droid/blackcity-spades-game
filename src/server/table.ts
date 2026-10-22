@@ -24,7 +24,7 @@ export interface SeatInfo {
   botActed: boolean;        // the bot has acted for this seat in the current hand
   disconnectedAt: number | null;
   ready: boolean;
-  face?: string;            // bots only: id of a profile photo in public/faces
+  face?: string;            // bots: id of a photo in public/faces (people's picks come from hooks.faceOf)
   chatStyle?: 'chill' | 'trash' | 'elite'; // bots only: 'trash' bots talk smack, 'elite' bots are cocky (and talk smack too)
   skill?: Skill;            // bots only: 'strong' bots play better (src/engine/bot.ts)
 }
@@ -35,9 +35,12 @@ export type Timings = { -readonly [K in keyof typeof CONFIG.timing]: number };
 export const defaultTimings = (): Timings => ({ ...CONFIG.timing });
 
 import type { SeriesInfo } from './tournament.js';
+import { fallbackAvatar, validAvatar } from './avatar.js';
 
 export interface TableHooks {
   send(playerId: string, msg: object): void;
+  /** The avatar a player picked (already validated), if any. */
+  faceOf?(playerId: string): string | undefined;
   changed(): void;
   destroyed(table: Table, participants: string[]): void;
   released(playerId: string, table: Table): void;
@@ -173,6 +176,13 @@ export class Table {
   /** Pick a persona for a new bot: never a name already at this table. */
   private botPersona(): Persona {
     return pickPersona(this.rng, new Set(this.seats.map((x) => x.name)));
+  }
+
+  /** What everyone sees at a seat: a picked avatar, a computer player's photo, or a fixed random face. */
+  private seatFace(s: SeatInfo): string | undefined {
+    if (s.kind === 'empty') return undefined;
+    if (s.kind === 'bot') return s.face ?? fallbackAvatar('n:' + s.name);
+    return validAvatar(s.playerId ? this.hooks.faceOf?.(s.playerId) : undefined) ?? fallbackAvatar('p:' + s.playerId);
   }
 
   /** Put a human directly in a seat (used for tournament match setup and by sit()). */
@@ -651,7 +661,7 @@ export class Table {
       seats: this.seats.map((s, i) => ({
         kind: s.kind,
         name: s.name,
-        face: s.kind === 'bot' ? s.face : undefined,
+        face: this.seatFace(s),
         connected: s.kind === 'human' ? s.connected : true,
         botControlled: s.kind === 'human' && s.botControlled,
         cards: g ? g.hands[i].length : 0,

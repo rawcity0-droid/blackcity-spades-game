@@ -25,6 +25,7 @@ export interface Player {
   tournamentId: string | null;
   eventId: string | null;       // multi-table event ("Create Tournament")
   lastSeen: number;
+  face?: string;                // picked avatar (already checked by validAvatar); none = a fixed random one
 }
 
 export interface Conn {
@@ -208,6 +209,12 @@ export class Hub {
 
   // ---------- hello / identity ----------
 
+  /** Show a new avatar pick at the player's table right away. */
+  private refreshFace(p: Player): void {
+    const t = p.tableId ? this.tables.get(p.tableId) : undefined;
+    t?.broadcast();
+  }
+
   private hello(conn: Conn, msg: Extract<ClientMsg, { t: 'hello' }>): void {
     if (conn.player) return;
     this.sweep();
@@ -226,6 +233,7 @@ export class Hub {
     }
     p.ws = conn.ws;
     if (msg.nick) p.nick = msg.nick;
+    p.face = msg.face;
     p.lastSeen = Date.now();
     conn.player = p;
     logActivity('hello', { resumed, test: isTestNick(p.nick) });
@@ -348,6 +356,7 @@ export class Hub {
       return this.err(p, 'name_required', 'Enter your name first');
     }
     switch (msg.t) {
+      case 'setFace': p.face = msg.face; return this.refreshFace(p);
       case 'setNick': p.nick = msg.nick; return this.send(p.id, { t: 'nick', nick: p.nick });
       case 'createTable': return this.createTable(p, msg.isPublic, msg.target, msg.breakRule, msg.sandbags, practice, msg.teamMin4 !== false, msg.jokers === true, msg.setsOut === true);
       case 'setRules': return this.tableAction(p, (t) => t.setRules(p.id, msg));
@@ -437,6 +446,7 @@ export class Hub {
       tournament: opts.tournament, rng: this.rng,
       hooks: {
         send: (pid, msg) => this.send(pid, msg),
+        faceOf: (pid) => this.players.get(pid)?.face,
         changed: () => this.markLobbyDirty(),
         destroyed: (t, people) => this.tableDestroyed(t, people),
         released: (pid, t) => this.releasePlayer(pid, t),

@@ -2,6 +2,7 @@
 // and automatic advancement. Human matches are played at real tables created through the host callback.
 // Team 0 of a match sits at seats 0&2, team 1 at seats 1&3.
 
+import { fallbackAvatar } from './avatar.js';
 import { CONFIG, tournamentTarget, tournamentWinsNeeded } from '../config.js';
 import { Rng, secureRng, shuffle } from '../engine/cards.js';
 import { simulateGame } from '../engine/sim.js';
@@ -311,7 +312,7 @@ export class Tournament {
     const teamView = (t: TeamRef | null) => t && {
       id: t.id,
       name: t.name,
-      players: t.slots.map((s) => ({ name: s.name, bot: s.playerId === null, face: s.playerId === null ? s.persona?.face : undefined })),
+      players: t.slots.map((s) => ({ name: s.name, bot: s.playerId === null, face: s.playerId === null ? s.persona?.face ?? fallbackAvatar('n:' + s.name) : undefined })),
       mine: t.slots.some((s) => s.playerId === pid),
     };
     return {

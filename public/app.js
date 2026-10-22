@@ -8,6 +8,7 @@ import { s as svg } from './svg.js';
 import { createMusic } from './music.js';
 import { activeGame, canGoBack, navAfterEnd, navAfterSheet, navAfterTable, returnSummary, sheetLeaveConfirm, sheetLeaveLabel, tableLeaveConfirm } from './leave-rules.js';
 import { shouldShowCover } from './cover-rules.js';
+import { PARTS, PRESETS, avatarSrc, decode, encode, isCustom, randomCode, seededCode } from './avatar.js';
 import { parseMusicPrefs, serializeMusicPrefs } from './music-state.js';
 
 // ---------- helpers ----------
@@ -36,6 +37,7 @@ const KEY_TOKEN = 'spades_token' + sfx;
 const KEY_NICK = 'spades_nick' + sfx;
 const KEY_PRACTICE = 'spades_practice' + sfx;
 const KEY_AVATAR = 'spades_avatar' + sfx;
+const KEY_FACE = 'spades_face' + sfx; // picked avatar: a preset id or a custom face code; shown to everyone
 const KEY_COVER = 'spades_cover' + sfx; // sessionStorage: the cover screen was already shown in this tab
 const KEY_MUSIC = 'spades_music' + sfx; // {on, vol}: table music on/off and volume
 const mkStore = (area) => ({
@@ -72,6 +74,7 @@ const state = {
   nick: savedNick(),
   token: store.get(KEY_TOKEN) || '',
   avatar: session.get(KEY_AVATAR) || '', // profile photo: local only, never sent to the server
+  face: store.get(KEY_FACE) || '',        // picked avatar, sent to the server (it checks it)
   config: null,
   subscribed: false,
   connected: false,
@@ -106,7 +109,7 @@ function connect() {
   ws.onopen = () => {
     retry = 800;
     state.connected = true;
-    send({ t: 'hello', nick: state.nick, token: state.token || undefined });
+    send({ t: 'hello', nick: state.nick, token: state.token || undefined, face: state.face || undefined });
     clearInterval(pingTimer);
     pingTimer = setInterval(() => send({ t: 'ping' }), 25000);
     renderConn();
@@ -348,17 +351,20 @@ function pickPhoto(file, done) {
   fr.readAsDataURL(file);
 }
 
-/** A bot's photo from the server's table view (an id like "marcus"); nothing is shown for an unknown id. */
+/** A seat picture from the table view: a custom face code (drawn here) or a picture id like "lion"; nothing for anything else. */
 function facePhoto(face) {
+  if (isCustom(face)) return h('img', { src: avatarSrc(face), alt: '', draggable: 'false' });
   if (!/^[a-z0-9]{1,20}$/.test(face || '')) return null;
   return h('img', { src: `/faces/${face}.jpg`, alt: '', loading: 'lazy', draggable: 'false' });
 }
+/** My own avatar as others see it: what I picked, or a fixed face from my name. */
+const myFace = () => state.face || seededCode('n:' + (state.nick || 'You'));
 
 /** Round avatar: the first letter of a name, or the local profile photo for "me". */
 function avatar(name, { me = false, cls = '', face = '' } = {}) {
   const el = h('div', { class: 'avatar ' + cls });
   if (me && state.avatar) el.append(h('img', { src: state.avatar, alt: '' }));
-  else if (facePhoto(face)) el.append(facePhoto(face));
+  else if (facePhoto(face || (me ? myFace() : name ? seededCode('n:' + name) : ''))) el.append(facePhoto(face || (me ? myFace() : seededCode('n:' + name))));
   else el.textContent = (name || '?').trim().slice(0, 1).toUpperCase() || '?';
   return el;
 }
@@ -583,6 +589,73 @@ function renderHome() {
 // ---------- Play Online modal ----------
 const refs = {};
 
+/** Avatar builder: build a face part by part, or pick a picture. Saved on this device and sent to the server. */
+function openAvatarBuilder() {
+  let code = isCustom(state.face) ? state.face : (state.face ? '' : myFace());
+  let preset = code ? '' : state.face;
+  let tab = 0; // which part's options are showing
+  const { el, body } = modalCard({ title: 'Your avatar', id: 'avatar', cls: 'wide avatar-builder' });
+  const preview = h('div', { class: 'avatar xl' });
+  const tagline = h('div', { class: 'av-tag' });
+  const tabs = h('div', { class: 'av-tabs', role: 'tablist' });
+  const grid = h('div', { class: 'av-grid' });
+  const current = () => preset || code;
+  const pop = (node) => { node.classList.remove('pop'); void node.offsetWidth; node.classList.add('pop'); };
+  function draw() {
+    preview.replaceChildren(facePhoto(current()));
+    tagline.textContent = preset ? (PRESETS.find(([id]) => id === preset) || [, ''])[1] : describe(code);
+    tabs.replaceChildren(...[...PARTS.map((p) => p.label), 'Pictures'].map((label, i) =>
+      h('button', { class: 'av-tab' + (i === tab ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(i === tab), text: label, onclick: () => { tab = i; draw(); } })));
+    grid.replaceChildren();
+    if (tab === PARTS.length) {
+      for (const [id, label] of PRESETS) grid.append(option(facePhoto(id), label, preset === id, () => { preset = id; }));
+      return;
+    }
+    const part = PARTS[tab];
+    const now = decode(code || myFace());
+    for (let v = 0; v < part.n; v++) {
+      const thumb = part.swatch ? h('span', { class: 'swatch' }) : facePhoto(encode({ ...now, [part.key]: v, ...(part.key === 'hair' ? { hat: 0 } : {}) })) // hair shows without a hat;
+      if (part.swatch) thumb.style.background = part.swatch[v];
+      grid.append(option(thumb, part.names ? part.names[v] : `${part.label} ${v + 1}`, !preset && now[part.key] === v, () => { preset = ''; code = encode({ ...now, [part.key]: v }); }, !!part.swatch));
+    }
+  }
+  function option(thumb, label, on, pick, round = false) {
+    const b = h('button', { class: 'av-opt' + (on ? ' on' : '') + (round ? ' round' : ''), type: 'button', 'aria-pressed': String(on), 'aria-label': label, title: label },
+      thumb, round ? null : h('span', { text: label }));
+    b.addEventListener('click', () => { pick(); draw(); pop(preview); });
+    return b;
+  }
+  body.append(
+    h('div', { class: 'av-top' }, preview, h('div', { class: 'av-side' }, tagline,
+      btn('outline', '🎲 Surprise me', () => { preset = ''; code = randomCode(); draw(); pop(preview); }))),
+    tabs, grid,
+    h('div', { class: 'av-actions' },
+      btn('gold', 'Save avatar', () => {
+        state.face = current();
+        store.set(KEY_FACE, state.face);
+        send({ t: 'setFace', face: state.face });
+        closeModal('avatar');
+        if (modals.has('play')) { closeModal('play'); openPlayModal(); }
+        render();
+        toast('Avatar saved');
+      }),
+      link('Cancel', () => closeModal('avatar'))),
+  );
+  draw();
+  openModal('avatar', el);
+}
+
+/** A short, fun line for the builder preview. */
+function describe(code) {
+  const a = decode(code);
+  const bits = [PARTS[2].names[a.hair]];
+  if (a.facial) bits.push(PARTS[8].names[a.facial].toLowerCase());
+  if (a.glasses) bits.push(PARTS[9].names[a.glasses].toLowerCase());
+  if (a.hat) bits.push(PARTS[10].names[a.hat].toLowerCase());
+  if (a.jewelry) bits.push(PARTS[11].names[a.jewelry].toLowerCase());
+  return bits.join(' · ');
+}
+
 function openPlayModal() {
   closeModal('menu');
   const { el, body } = modalCard({ title: 'Play Online', id: 'play', cls: 'wide' });
@@ -598,8 +671,8 @@ function openPlayModal() {
   refs.nameError = nameError;
   const fileInput = h('input', { type: 'file', accept: 'image/*', class: 'hidden', 'aria-label': 'Choose profile photo' });
   fileInput.addEventListener('change', () => pickPhoto(fileInput.files[0], () => { closeModal('play'); openPlayModal(); }));
-  const me = h('div', { class: 'avatar big' });
-  if (state.avatar) me.append(h('img', { src: state.avatar, alt: 'Your profile photo' })); else me.textContent = 'YOU';
+  const me = h('button', { class: 'avatar big tap', type: 'button', 'aria-label': 'Customize your avatar', onclick: openAvatarBuilder });
+  me.append(state.avatar ? h('img', { src: state.avatar, alt: 'Your profile photo' }) : facePhoto(myFace()));
   const limited = freeLimited();
   const sub = state.subscribed
     ? 'Premium active — host tables, tournaments, and brackets, or join with a code.'
@@ -615,8 +688,10 @@ function openPlayModal() {
     nameInput,
     nameError,
     h('div', { class: 'photo-row' }, me,
-      h('div', {}, btn('outline', 'Choose profile photo', () => fileInput.click()),
-        h('div', { class: 'tiny', text: 'Shown at your seat for this session.' })), fileInput),
+      h('div', { class: 'photo-btns' }, btn('gold', 'Customize avatar', openAvatarBuilder),
+        btn('outline', 'Choose profile photo', () => fileInput.click()),
+        state.avatar ? link('Remove photo', () => { state.avatar = ''; session.del(KEY_AVATAR); closeModal('play'); openPlayModal(); }) : null,
+        h('div', { class: 'tiny', text: state.avatar ? 'Your photo shows only on your screen. Everyone else sees your avatar.' : 'Everyone at the table sees your avatar.' })), fileInput),
     ...(limited ? [] : state.subscribed ? [] : [h('div', { class: 'prem-row light' },
       h('button', { class: 'pill-gold', type: 'button', text: premiumLabel(), onclick: goPremium }), link('Restore Premium', openRestore))]),
     limited
@@ -1246,7 +1321,7 @@ function seatCard(t, i) {
   const initials = filled ? s.name.trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() : String(i + 1);
   const circle = h('div', { class: 'avatar sm' });
   if (isMe && state.avatar) circle.append(h('img', { src: state.avatar, alt: '' }));
-  else if (filled && facePhoto(s.face)) circle.append(facePhoto(s.face));
+  else if (filled && facePhoto(s.face || seededCode('n:' + s.name))) circle.append(facePhoto(s.face || seededCode('n:' + s.name)));
   else circle.textContent = initials;
   const label = `Team ${team + 1} · Position ${pos}${isMe ? ' · You' : ''}`;
   return h('div', { class: 'seatcard' + (filled ? '' : ' vacant') }, circle,
@@ -1470,7 +1545,7 @@ function renderBracketSheet() {
 
 /** The two players' small avatars (bot pictures, or first letters) in front of a team name. */
 function teamFaces(t) {
-  return h('span', { class: 'mfaces' }, (t.players || []).map((p) => avatar(p.name, { cls: 'mini', face: p.bot ? p.face : '' })));
+  return h('span', { class: 'mfaces' }, (t.players || []).map((p) => avatar(p.name, { cls: 'mini', face: p.face || '' })));
 }
 
 function matchCard(m) {
